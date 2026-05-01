@@ -3,18 +3,21 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from camst.camera import HLSStream
+from camst.camera import CameraStream
+from camst.webrtc import CameraVideoTrack
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 def create_app() -> FastAPI:
-    camera = HLSStream()
+    camera = CameraStream()
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    pcs: set[RTCPeerConnection] = set()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -22,38 +25,45 @@ def create_app() -> FastAPI:
         try:
             yield
         finally:
+            for pc in list(pcs):
+                await pc.close()
+            pcs.clear()
             camera.stop()
 
     app = FastAPI(lifespan=lifespan)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(
-            request, "index.html", {"playlist": f"/hls/{camera.playlist_name}"}
-        )
+        return templates.TemplateResponse(request, "index.html")
 
-    @app.get("/hls/{filename}")
-    async def hls_file(filename: str) -> FileResponse:
-        if "/" in filename or ".." in filename:
-            raise HTTPException(status_code=400)
-        path = camera.directory / filename
-        if not path.is_file():
-            raise HTTPException(status_code=404)
-        if filename.endswith(".m3u8"):
-            media_type = "application/vnd.apple.mpegurl"
-        elif filename.endswith(".ts"):
-            media_type = "video/mp2t"
-        else:
-            media_type = "application/octet-stream"
-        return FileResponse(
-            path,
-            media_type=media_type,
-            headers={"Cache-Control": "no-store"},
+    @app.post("/offer")
+    async def offer(request: Request) -> JSONResponse:
+        params = await request.json()
+        offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+
+        pc = RTCPeerConnection()
+        pcs.add(pc)
+
+        @pc.on("connectionstatechange")
+        async def on_state_change() -> None:
+            if pc.connectionState in {"failed", "closed", "disconnected"}:
+                await pc.close()
+                pcs.discard(pc)
+
+        pc.addTrack(CameraVideoTrack(camera))
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        return JSONResponse(
+            {
+                "sdp": pc.localDescription.sdp,
+                "type": pc.localDescription.type,
+            }
         )
 
     @app.get("/status", response_class=HTMLResponse)
     async def status() -> HTMLResponse:
-        fps = camera.fps
-        return HTMLResponse(f"<span class='font-mono'>{fps:5.1f} fps</span>")
+        return HTMLResponse(f"<span class='font-mono'>{camera.fps:5.1f} fps</span>")
 
     return app
