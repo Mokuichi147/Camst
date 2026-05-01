@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>OAK-D LITE RGB</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+</head>
+<style>
+  /* iOS iPhone 用 Fullscreen API フォールバック */
+  .pseudo-fullscreen {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    aspect-ratio: auto !important;
+    z-index: 9999 !important;
+    background: #000 !important;
+  }
+  .pseudo-fullscreen-lock {
+    overflow: hidden !important;
+  }
+</style>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <div class="max-w-5xl mx-auto p-6">
+    <header class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h1 class="text-2xl font-semibold">OAK-D LITE RGB ストリーム</h1>
+      <div class="flex items-center gap-3">
+        <div
+          class="text-sm text-slate-400"
+          hx-get="/status"
+          hx-trigger="load, every 1s"
+          hx-swap="innerHTML"
+        >
+          接続中…
+        </div>
+        <button
+          id="btn-fullscreen"
+          class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition"
+          type="button"
+        >全画面</button>
+        <button
+          id="btn-pip"
+          class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
+          type="button"
+        >PiP</button>
+      </div>
+    </header>
+
+    <div
+      id="viewer"
+      class="relative rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video flex items-center justify-center group"
+    >
+      <video
+        id="stream"
+        class="w-full h-full object-contain"
+        autoplay
+        muted
+        playsinline
+        controls
+      ></video>
+    </div>
+    <p class="text-xs text-slate-500 mt-3">HLS over HTTP · 遅延は 2〜5 秒程度</p>
+  </div>
+
+  <script>
+    (() => {
+      const playlistUrl = {{ playlist | tojson }};
+      const viewer = document.getElementById("viewer");
+      const video = document.getElementById("stream");
+      const btnFs = document.getElementById("btn-fullscreen");
+      const btnPip = document.getElementById("btn-pip");
+
+      // --- HLS 読み込み ---
+      const loadStream = () => {
+        if (video.canPlayType("application/vnd.apple.mpegurl")) {
+          // Safari / iOS / iPadOS: ネイティブ HLS
+          video.src = playlistUrl;
+        } else if (window.Hls && Hls.isSupported()) {
+          const hls = new Hls({ lowLatencyMode: true, liveSyncDuration: 2 });
+          hls.loadSource(playlistUrl);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.ERROR, (_, data) => {
+            if (data.fatal) console.error("HLS error", data);
+          });
+        } else {
+          alert("このブラウザは HLS に対応していません");
+        }
+      };
+      loadStream();
+      video.play().catch(() => {});
+
+      // --- 全画面 ---
+      const hasFullscreenApi = !!(
+        document.fullscreenEnabled || document.webkitFullscreenEnabled
+      );
+      const enterPseudo = () => {
+        viewer.classList.add("pseudo-fullscreen");
+        document.body.classList.add("pseudo-fullscreen-lock");
+      };
+      const exitPseudo = () => {
+        viewer.classList.remove("pseudo-fullscreen");
+        document.body.classList.remove("pseudo-fullscreen-lock");
+      };
+      const isPseudo = () => viewer.classList.contains("pseudo-fullscreen");
+
+      const toggleFullscreen = async () => {
+        try {
+          // iPhone iOS Safari は <video> のみ全画面可能
+          if (video.webkitEnterFullscreen && !hasFullscreenApi) {
+            video.webkitEnterFullscreen();
+            return;
+          }
+          if (document.fullscreenElement || document.webkitFullscreenElement) {
+            (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            return;
+          }
+          if (isPseudo()) {
+            exitPseudo();
+            return;
+          }
+          if (hasFullscreenApi) {
+            const req = viewer.requestFullscreen || viewer.webkitRequestFullscreen;
+            if (req) {
+              await req.call(viewer);
+              return;
+            }
+          }
+          enterPseudo();
+        } catch {
+          enterPseudo();
+        }
+      };
+      btnFs.addEventListener("click", toggleFullscreen);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "f" || e.key === "F") toggleFullscreen();
+        if (e.key === "Escape" && isPseudo()) exitPseudo();
+      });
+
+      // --- PiP ---
+      const supportsStandardPip =
+        "pictureInPictureEnabled" in document && document.pictureInPictureEnabled;
+      const supportsIosPip =
+        typeof video.webkitSupportsPresentationMode === "function" &&
+        video.webkitSupportsPresentationMode("picture-in-picture");
+
+      if (!supportsStandardPip && !supportsIosPip) {
+        btnPip.disabled = true;
+        btnPip.title = "このブラウザは PiP に未対応";
+      }
+
+      btnPip.addEventListener("click", async () => {
+        try {
+          if (supportsIosPip) {
+            // iOS / iPadOS Safari
+            const mode =
+              video.webkitPresentationMode === "picture-in-picture"
+                ? "inline"
+                : "picture-in-picture";
+            video.webkitSetPresentationMode(mode);
+            return;
+          }
+          if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+          } else {
+            await video.requestPictureInPicture();
+          }
+        } catch (err) {
+          console.error("PiP 失敗:", err);
+          alert("PiP を開始できませんでした: " + err.message);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
