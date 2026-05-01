@@ -8,6 +8,30 @@
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <style>
+  html, body {
+    margin: 0;
+    background: #0f172a; /* slate-900 */
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  /* ヘッダー高を変数化して video の max-height 計算で利用 */
+  :root {
+    --header-h: 3rem;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  #stream {
+    display: block;
+    width: 100vw;
+    aspect-ratio: 16 / 9;
+    max-height: calc(100dvh - var(--header-h) - var(--safe-top) - var(--safe-bottom));
+    object-fit: contain;
+    background: #000;
+  }
   /* iOS iPhone 用 Fullscreen API フォールバック */
   .pseudo-fullscreen {
     position: fixed !important;
@@ -25,10 +49,16 @@
     overflow: hidden !important;
   }
 </style>
-<body class="bg-slate-900 text-slate-100 min-h-screen">
-  <div class="max-w-5xl mx-auto p-6">
-    <header class="flex items-center justify-between mb-4 flex-wrap gap-2">
-      <h1 class="text-2xl font-semibold">OAK-D LITE RGB ストリーム</h1>
+<body
+  class="bg-slate-900 text-slate-100"
+  style="padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);"
+>
+  <div class="flex flex-col">
+    <header
+      class="flex items-center justify-between gap-2 shrink-0 px-3 py-2 bg-slate-900"
+      style="height: var(--header-h);"
+    >
+      <h1 class="text-lg sm:text-xl font-semibold">OAK-D LITE RGB</h1>
       <div class="flex items-center gap-3">
         <div
           class="text-sm text-slate-400"
@@ -38,6 +68,7 @@
         >
           接続中…
         </div>
+        <span id="conn-state" class="text-xs text-slate-500 hidden sm:inline">待機中…</span>
         <button
           id="btn-fullscreen"
           class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition"
@@ -51,23 +82,15 @@
       </div>
     </header>
 
-    <div
-      id="viewer"
-      class="relative rounded-2xl overflow-hidden shadow-2xl bg-black aspect-video flex items-center justify-center group"
-    >
+    <main id="viewer" class="relative group">
       <video
         id="stream"
-        class="w-full h-full object-contain"
         autoplay
         muted
         playsinline
         controls
       ></video>
-    </div>
-    <p
-      id="conn-state"
-      class="text-xs text-slate-500 mt-3"
-    >WebRTC · 接続待機中…</p>
+    </main>
   </div>
 
   <script>
@@ -77,6 +100,20 @@
       const btnFs = document.getElementById("btn-fullscreen");
       const btnPip = document.getElementById("btn-pip");
       const connState = document.getElementById("conn-state");
+
+      // --- iOS / iPadOS のスクロール完全抑止 ---
+      document.addEventListener(
+        "touchmove",
+        (e) => {
+          // <video> の中だけは標準操作(controlsバー等)を許可
+          if (e.target.closest && e.target.closest("video")) return;
+          e.preventDefault();
+        },
+        { passive: false }
+      );
+      window.addEventListener("scroll", () => window.scrollTo(0, 0), {
+        passive: true,
+      });
 
       // --- WebRTC 接続 ---
       const startWebRTC = async () => {
