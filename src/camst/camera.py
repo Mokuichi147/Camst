@@ -3,16 +3,31 @@ from __future__ import annotations
 import threading
 import time
 
+import cv2
 import depthai as dai
 import numpy as np
+
+_ROTATE_CODE = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
 
 
 class CameraStream:
     """OAK-D LITE のRGBフレームをバックグラウンドで取得して共有する。"""
 
-    def __init__(self, size: tuple[int, int] = (1280, 720), fps: int = 30) -> None:
+    def __init__(
+        self,
+        size: tuple[int, int] = (1280, 720),
+        fps: int = 30,
+        rotate: int = 0,
+    ) -> None:
+        if rotate not in (0, 90, 180, 270):
+            raise ValueError("rotate は 0/90/180/270 のいずれかです")
         self._size = size
         self._fps = fps
+        self._rotate = rotate
         self._lock = threading.Lock()
         self._frame: np.ndarray | None = None
         self._stop = threading.Event()
@@ -51,8 +66,11 @@ class CameraStream:
             count = 0
             while pipeline.isRunning() and not self._stop.is_set():
                 pkt = queue.get()
+                frame = pkt.getCvFrame()
+                if self._rotate:
+                    frame = cv2.rotate(frame, _ROTATE_CODE[self._rotate])
                 with self._lock:
-                    self._frame = pkt.getCvFrame()
+                    self._frame = frame
                 count += 1
                 now = time.time()
                 if now - last >= 1.0:

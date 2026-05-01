@@ -14,8 +14,9 @@ from camst.webrtc import CameraVideoTrack
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def create_app() -> FastAPI:
-    camera = CameraStream()
+def create_app(rotate: int = 0) -> FastAPI:
+    camera = CameraStream(rotate=rotate)
+    aspect_w, aspect_h = (9, 16) if rotate in (90, 270) else (16, 9)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     pcs: set[RTCPeerConnection] = set()
 
@@ -34,7 +35,11 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "index.html")
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {"aspect_w": aspect_w, "aspect_h": aspect_h},
+        )
 
     @app.post("/offer")
     async def offer(request: Request) -> JSONResponse:

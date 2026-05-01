@@ -27,7 +27,7 @@
   #stream {
     display: block;
     width: 100vw;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: {{ aspect_w }} / {{ aspect_h }};
     max-height: calc(100dvh - var(--header-h) - var(--safe-top) - var(--safe-bottom));
     object-fit: contain;
     background: #000;
