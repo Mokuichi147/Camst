@@ -253,10 +253,12 @@ class LeapCameraStream(BaseCameraStream):
         if self._denoise > 1:
             self._buf.append(gray)
             gray = np.mean(self._buf, axis=0).astype(np.uint8)
-        if self._nlm:
-            gray = self._apply_nlm(gray)
+        # 先にCLAHEで暗い遠方を持ち上げ、その後にNLMeansで増えたノイズを除去する。
+        # (順序を逆にすると遠方の微弱なディテールが先に潰れてしまう)
         if self._clahe is not None:
             gray = self._clahe.apply(gray)
+        if self._nlm:
+            gray = self._apply_nlm(gray)
         self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
 
     def _run(self) -> None:
