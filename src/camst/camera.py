@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
@@ -188,12 +189,11 @@ class LeapCameraStream(BaseCameraStream):
             )
         return index
 
-    def _split_eyes(self, frame) -> tuple[np.ndarray, np.ndarray]:
+    def _split_eyes(self, flat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         # leapuvc と同じ手順: 生バイトを (高さ, 幅*2) に並べ、左右IRが1バイトずつ
         # 交互に並んでいるので偶数列=左眼・奇数列=右眼として分離する。
         w, h = self._size
-        flat = np.frombuffer(bytes(frame.planes[0]), np.uint8)
-        raw = flat[: h * w * 2].reshape(h, w * 2)
+        raw = flat.reshape(-1)[: h * w * 2].reshape(h, w * 2)
         return raw[:, 0::2], raw[:, 1::2]
 
     def _select(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -204,7 +204,18 @@ class LeapCameraStream(BaseCameraStream):
             return np.hstack([right, left])
         return left
 
+    def _emit(self, flat: np.ndarray) -> None:
+        gray = np.ascontiguousarray(self._select(*self._split_eyes(flat)))
+        self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+
     def _run(self) -> None:
+        if sys.platform == "darwin":
+            self._run_avfoundation()
+        else:
+            self._run_v4l2()
+
+    def _run_avfoundation(self) -> None:
+        # macOS: cv2 は生バイトを渡さないため PyAV(avfoundation) で取得する。
         import av
         import av.error
 
@@ -224,10 +235,7 @@ class LeapCameraStream(BaseCameraStream):
                     for frame in container.decode(video=0):
                         if self._stop.is_set():
                             break
-                        gray = np.ascontiguousarray(
-                            self._select(*self._split_eyes(frame))
-                        )
-                        self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+                        self._emit(np.frombuffer(bytes(frame.planes[0]), np.uint8))
                 except av.error.BlockingIOError:
                     # まだフレームが届いていない。少し待って再試行する。
                     time.sleep(0.005)
@@ -236,12 +244,57 @@ class LeapCameraStream(BaseCameraStream):
         finally:
             container.close()
 
+    def _run_v4l2(self) -> None:
+        # Linux(Raspberry Pi等): leapuvc 同様 cv2+V4L2 で生バイトを取得する。
+        index = self._resolve_index()
+        w, h = self._size
+        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            raise RuntimeError(f"カメラ(index={index})を開けませんでした")
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # 生のYUYVを取得する
+        self._fps_last = time.time()
+        try:
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok:
+                    time.sleep(0.01)
+                    continue
+                self._emit(np.asarray(frame, dtype=np.uint8))
+        finally:
+            cap.release()
+
 
 def find_camera_index(name_keyword: str) -> int | None:
-    """名前にキーワードを含む avfoundation ビデオデバイスのインデックスを返す。
+    """名前にキーワードを含むビデオデバイスのインデックスを返す。"""
+    if sys.platform != "darwin":
+        return _find_camera_index_v4l2(name_keyword)
+    return _find_camera_index_avfoundation(name_keyword)
 
-    libavdevice(PyAV) のデバイス一覧をそのまま解析するので、PyAV でのキャプチャ
-    時に渡すインデックスと一致する（macOS 向け）。"""
+
+def _find_camera_index_v4l2(name_keyword: str) -> int | None:
+    """Linux: /sys/class/video4linux から名前一致するデバイス番号を返す。"""
+    import glob
+    import re
+
+    candidates = []
+    for path in glob.glob("/sys/class/video4linux/video*/name"):
+        try:
+            with open(path) as f:
+                name = f.read().strip()
+        except OSError:
+            continue
+        if name_keyword.lower() in name.lower():
+            num = int(re.search(r"video(\d+)", path).group(1))
+            candidates.append(num)
+    # 同名ノードが複数ある場合は、通常キャプチャ可能な最小番号を使う。
+    return min(candidates) if candidates else None
+
+
+def _find_camera_index_avfoundation(name_keyword: str) -> int | None:
+    """macOS: libavdevice(PyAV) のデバイス一覧をそのまま解析する。
+    PyAV でのキャプチャ時に渡すインデックスと一致する。"""
     import re
 
     import av
