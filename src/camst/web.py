@@ -8,14 +8,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from camst.camera import CameraStream
+from camst.camera import create_camera
 from camst.webrtc import CameraVideoTrack
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def create_app(rotate: int = 0) -> FastAPI:
-    camera = CameraStream(rotate=rotate)
+def create_app(
+    source: str = "oak",
+    device: int | str = "Leap Motion",
+    rotate: int = 0,
+    eye: str = "left",
+) -> FastAPI:
+    camera = create_camera(source=source, device=device, rotate=rotate, eye=eye)
     aspect_w, aspect_h = (9, 16) if rotate in (90, 270) else (16, 9)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     pcs: set[RTCPeerConnection] = set()

@@ -4,20 +4,20 @@ import cv2
 import typer
 import uvicorn
 
-from camst.camera import CameraStream
+from camst.camera import create_camera
 from camst.web import create_app
 
-app = typer.Typer(add_completion=False, help="OAK-D LITE RGB ビューアー")
+app = typer.Typer(add_completion=False, help="カメラ映像ビューアー (OAK-D LITE / UVC)")
 
 
-def _run_local(rotate: int) -> None:
-    camera = CameraStream(rotate=rotate)
+def _run_local(source: str, device: int | str, rotate: int, eye: str) -> None:
+    camera = create_camera(source=source, device=device, rotate=rotate, eye=eye)
     camera.start()
     try:
         while True:
             frame = camera.latest()
             if frame is not None:
-                cv2.imshow("OAK-D LITE RGB", frame)
+                cv2.imshow("camst", frame)
             if cv2.waitKey(1) == ord("q"):
                 break
     finally:
@@ -25,12 +25,32 @@ def _run_local(rotate: int) -> None:
         cv2.destroyAllWindows()
 
 
-def _run_webui(host: str, port: int, rotate: int) -> None:
-    uvicorn.run(create_app(rotate=rotate), host=host, port=port)
+def _run_webui(
+    host: str, port: int, source: str, device: int | str, rotate: int, eye: str
+) -> None:
+    uvicorn.run(
+        create_app(source=source, device=device, rotate=rotate, eye=eye),
+        host=host,
+        port=port,
+    )
 
 
 @app.command()
 def main(
+    source: str = typer.Option(
+        "oak",
+        "--source",
+        help="カメラの種類 (oak | leap | uvc)",
+        case_sensitive=False,
+    ),
+    device: str = typer.Option(
+        "Leap Motion",
+        "--device",
+        help="leap/uvc用のデバイス指定。番号 (例: 1) かデバイス名の一部 (例: Leap)",
+    ),
+    eye: str = typer.Option(
+        "left", "--eye", help="leap用: 使う眼 (left | right | both)"
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -41,14 +61,16 @@ def main(
         case_sensitive=False,
     ),
 ) -> None:
-    """OAK-D LITE のRGB映像をリアルタイム表示する。"""
+    """カメラ映像をリアルタイム表示する。"""
+    if source not in ("oak", "leap", "uvc"):
+        raise typer.BadParameter("--source は oak / leap / uvc のいずれかです")
     if rotate not in (0, 90, 180, 270):
         raise typer.BadParameter("--rotate は 0/90/180/270 のいずれかです")
     if webui:
         typer.echo(f"WebUI を起動: http://{host}:{port}")
-        _run_webui(host, port, rotate)
+        _run_webui(host, port, source, device, rotate, eye)
     else:
-        _run_local(rotate)
+        _run_local(source, device, rotate, eye)
 
 
 def cli() -> None:
