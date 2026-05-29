@@ -260,7 +260,7 @@ class LeapCameraStream(BaseCameraStream):
             except OSError:
                 continue
             if str(self._device).lower() in name.lower():
-                cands.append(int(re.search(r"video(\d+)", path).group(1)))
+                cands.append(int(re.search(r"/video(\d+)/name$", path).group(1)))
         return sorted(cands)
 
     def _open_v4l2(self) -> cv2.VideoCapture:
@@ -320,7 +320,7 @@ def _find_camera_index_v4l2(name_keyword: str) -> int | None:
         except OSError:
             continue
         if name_keyword.lower() in name.lower():
-            num = int(re.search(r"video(\d+)", path).group(1))
+            num = int(re.search(r"/video(\d+)/name$", path).group(1))
             candidates.append(num)
     # 同名ノードが複数ある場合は、通常キャプチャ可能な最小番号を使う。
     return min(candidates) if candidates else None
