@@ -183,7 +183,10 @@ class LeapCameraStream(BaseCameraStream):
             raise ValueError("eye は left/right/both のいずれかです")
         if denoise < 1:
             raise ValueError("denoise は1以上です")
-        super().__init__(rotate)
+        super().__init__(rotate)  # rotate の検証と self._rotate 設定を再利用する
+        # 回転は左右それぞれの眼に対して行うため、_publish での二重回転は止める。
+        self._leap_rotate = self._rotate
+        self._rotate = 0
         self._device = device
         self._size = size
         self._fps = fps if fps is not None else self._MODES.get(size, "50")
@@ -224,6 +227,12 @@ class LeapCameraStream(BaseCameraStream):
         return raw[:, 0::2], raw[:, 1::2]
 
     def _select(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        # 回転は眼ごとに適用する。both のとき全体を回すと左右の配置が入れ替わる
+        # ため、各眼を個別に回転してから横並びにする。
+        if self._leap_rotate:
+            code = _ROTATE_CODE[self._leap_rotate]
+            left = cv2.rotate(left, code)
+            right = cv2.rotate(right, code)
         if self._eye == "right":
             return right
         if self._eye == "both":
