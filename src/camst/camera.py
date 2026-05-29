@@ -244,16 +244,50 @@ class LeapCameraStream(BaseCameraStream):
         finally:
             container.close()
 
+    def _v4l2_candidates(self) -> list[int]:
+        # 番号指定ならそれを、名前指定なら一致する全ノードを候補にする。
+        # Leap はキャプチャ用とメタデータ用など複数の video ノードを持つため。
+        if isinstance(self._device, int):
+            return [self._device]
+        import glob
+        import re
+
+        cands = []
+        for path in glob.glob("/sys/class/video4linux/video*/name"):
+            try:
+                with open(path) as f:
+                    name = f.read().strip()
+            except OSError:
+                continue
+            if str(self._device).lower() in name.lower():
+                cands.append(int(re.search(r"video(\d+)", path).group(1)))
+        return sorted(cands)
+
+    def _open_v4l2(self) -> cv2.VideoCapture:
+        # 候補ノードを順に開き、実際にフレームが取れたものを採用する。
+        w, h = self._size
+        candidates = self._v4l2_candidates()
+        if not candidates:
+            raise RuntimeError(
+                f"名前に '{self._device}' を含むカメラが見つかりません。"
+                "接続を確認するか --device に番号を指定してください。"
+            )
+        for index in candidates:
+            cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+                cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # 生のYUYVを取得する
+                if cap.read()[0]:
+                    return cap
+            cap.release()
+        raise RuntimeError(
+            f"Leap のキャプチャ可能な V4L2 デバイスが見つかりません（試行: {candidates}）"
+        )
+
     def _run_v4l2(self) -> None:
         # Linux(Raspberry Pi等): leapuvc 同様 cv2+V4L2 で生バイトを取得する。
-        index = self._resolve_index()
-        w, h = self._size
-        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            raise RuntimeError(f"カメラ(index={index})を開けませんでした")
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-        cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)  # 生のYUYVを取得する
+        cap = self._open_v4l2()
         self._fps_last = time.time()
         try:
             while not self._stop.is_set():
