@@ -12,12 +12,14 @@ app = typer.Typer(add_completion=False, help="カメラ映像ビューアー (OA
 
 def _run_local(
     source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float, denoise: int, nlm: bool, nlm_h: float,
+    correct: bool, clahe_clip: float, denoise: int,
+    nlm: bool, nlm_h: float, nlm_scale: float, nlm_template: int, nlm_search: int,
 ) -> None:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
         correct=correct, clahe_clip=clahe_clip, denoise=denoise,
-        nlm=nlm, nlm_h=nlm_h,
+        nlm=nlm, nlm_h=nlm_h, nlm_scale=nlm_scale,
+        nlm_template=nlm_template, nlm_search=nlm_search,
     )
     camera.start()
     try:
@@ -34,13 +36,15 @@ def _run_local(
 
 def _run_webui(
     host: str, port: int, source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float, denoise: int, nlm: bool, nlm_h: float,
+    correct: bool, clahe_clip: float, denoise: int,
+    nlm: bool, nlm_h: float, nlm_scale: float, nlm_template: int, nlm_search: int,
 ) -> None:
     uvicorn.run(
         create_app(
             source=source, device=device, rotate=rotate, eye=eye,
             correct=correct, clahe_clip=clahe_clip, denoise=denoise,
-            nlm=nlm, nlm_h=nlm_h,
+            nlm=nlm, nlm_h=nlm_h, nlm_scale=nlm_scale,
+            nlm_template=nlm_template, nlm_search=nlm_search,
         ),
         host=host,
         port=port,
@@ -76,7 +80,16 @@ def main(
         False, "--nlm", help="leap用: 空間NLMeansによる強力なノイズ除去を有効化"
     ),
     nlm_h: float = typer.Option(
-        10.0, "--nlm-h", help="leap用: NLMeansの強度(大きいほど強く除去)"
+        3.0, "--nlm-h", help="leap用: NLMeansの強度(大きいほど強く除去。強すぎると潰れる)"
+    ),
+    nlm_scale: float = typer.Option(
+        2.0, "--nlm-scale", help="leap用: NLMeansを縮小して高速化する倍率(大きいほど速いが粗い)"
+    ),
+    nlm_template: int = typer.Option(
+        7, "--nlm-template", help="leap用: NLMeansのテンプレート窓サイズ(奇数)"
+    ),
+    nlm_search: int = typer.Option(
+        21, "--nlm-search", help="leap用: NLMeansの探索窓サイズ(奇数。小さいほど速い)"
     ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
@@ -99,11 +112,13 @@ def main(
         typer.echo(f"WebUI を起動: http://{host}:{port}")
         _run_webui(
             host, port, source, device, rotate, eye,
-            correct, clahe_clip, denoise, nlm, nlm_h,
+            correct, clahe_clip, denoise,
+            nlm, nlm_h, nlm_scale, nlm_template, nlm_search,
         )
     else:
         _run_local(
-            source, device, rotate, eye, correct, clahe_clip, denoise, nlm, nlm_h
+            source, device, rotate, eye, correct, clahe_clip, denoise,
+            nlm, nlm_h, nlm_scale, nlm_template, nlm_search,
         )
 
 
