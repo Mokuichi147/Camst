@@ -12,11 +12,12 @@ app = typer.Typer(add_completion=False, help="カメラ映像ビューアー (OA
 
 def _run_local(
     source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float, denoise: int,
+    correct: bool, clahe_clip: float, denoise: int, nlm: bool, nlm_h: float,
 ) -> None:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
         correct=correct, clahe_clip=clahe_clip, denoise=denoise,
+        nlm=nlm, nlm_h=nlm_h,
     )
     camera.start()
     try:
@@ -33,12 +34,13 @@ def _run_local(
 
 def _run_webui(
     host: str, port: int, source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float, denoise: int,
+    correct: bool, clahe_clip: float, denoise: int, nlm: bool, nlm_h: float,
 ) -> None:
     uvicorn.run(
         create_app(
             source=source, device=device, rotate=rotate, eye=eye,
             correct=correct, clahe_clip=clahe_clip, denoise=denoise,
+            nlm=nlm, nlm_h=nlm_h,
         ),
         host=host,
         port=port,
@@ -70,6 +72,12 @@ def main(
     denoise: int = typer.Option(
         1, "--denoise", help="leap用: ノイズ低減のため直近Nフレームを移動平均(1=無効)"
     ),
+    nlm: bool = typer.Option(
+        False, "--nlm", help="leap用: 空間NLMeansによる強力なノイズ除去を有効化"
+    ),
+    nlm_h: float = typer.Option(
+        10.0, "--nlm-h", help="leap用: NLMeansの強度(大きいほど強く除去)"
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -90,10 +98,13 @@ def main(
     if webui:
         typer.echo(f"WebUI を起動: http://{host}:{port}")
         _run_webui(
-            host, port, source, device, rotate, eye, correct, clahe_clip, denoise
+            host, port, source, device, rotate, eye,
+            correct, clahe_clip, denoise, nlm, nlm_h,
         )
     else:
-        _run_local(source, device, rotate, eye, correct, clahe_clip, denoise)
+        _run_local(
+            source, device, rotate, eye, correct, clahe_clip, denoise, nlm, nlm_h
+        )
 
 
 def cli() -> None:

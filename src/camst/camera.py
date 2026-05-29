@@ -173,6 +173,8 @@ class LeapCameraStream(BaseCameraStream):
         correct: bool = False,
         clahe_clip: float = 2.0,
         denoise: int = 1,
+        nlm: bool = False,
+        nlm_h: float = 10.0,
     ) -> None:
         if eye not in ("left", "right", "both"):
             raise ValueError("eye は left/right/both のいずれかです")
@@ -192,6 +194,9 @@ class LeapCameraStream(BaseCameraStream):
         # 時間方向の移動平均によるノイズ低減(直近 denoise フレーム)
         self._denoise = denoise
         self._buf: deque[np.ndarray] = deque(maxlen=denoise)
+        # 空間NLMeansによる強力なノイズ除去(エッジ保存)
+        self._nlm = nlm
+        self._nlm_h = nlm_h
 
     def _resolve_index(self) -> int:
         if isinstance(self._device, int):
@@ -224,6 +229,8 @@ class LeapCameraStream(BaseCameraStream):
         if self._denoise > 1:
             self._buf.append(gray)
             gray = np.mean(self._buf, axis=0).astype(np.uint8)
+        if self._nlm:
+            gray = cv2.fastNlMeansDenoising(gray, None, self._nlm_h, 7, 21)
         if self._clahe is not None:
             gray = self._clahe.apply(gray)
         self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
@@ -386,6 +393,8 @@ def create_camera(
     correct: bool = False,
     clahe_clip: float = 2.0,
     denoise: int = 1,
+    nlm: bool = False,
+    nlm_h: float = 10.0,
 ) -> BaseCameraStream:
     """source に応じたカメラストリームを生成する。"""
     if source == "oak":
@@ -395,6 +404,7 @@ def create_camera(
         return LeapCameraStream(
             device=dev, rotate=rotate, eye=eye,
             correct=correct, clahe_clip=clahe_clip, denoise=denoise,
+            nlm=nlm, nlm_h=nlm_h,
         )
     if source == "uvc":
         return UvcCameraStream(device=dev, fps=fps, rotate=rotate)
