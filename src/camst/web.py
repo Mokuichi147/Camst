@@ -23,7 +23,7 @@ def create_app(
     clahe_clip: float = 2.0,
     denoise: int = 1,
     nlm: bool = False,
-    nlm_h: float = 3.0,
+    nlm_h: float = 1.0,
     nlm_scale: float = 2.0,
     nlm_template: int = 7,
     nlm_search: int = 21,

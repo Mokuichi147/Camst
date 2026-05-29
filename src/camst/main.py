@@ -80,7 +80,7 @@ def main(
         False, "--nlm", help="leap用: 空間NLMeansによる強力なノイズ除去を有効化"
     ),
     nlm_h: float = typer.Option(
-        3.0, "--nlm-h", help="leap用: NLMeansの強度(大きいほど強く除去。強すぎると潰れる)"
+        1.0, "--nlm-h", help="leap用: NLMeansの強度(大きいほど強く除去。強すぎると潰れる)"
     ),
     nlm_scale: float = typer.Option(
         2.0, "--nlm-scale", help="leap用: NLMeansを縮小して高速化する倍率(大きいほど速いが粗い)"
