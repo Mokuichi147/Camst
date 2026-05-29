@@ -169,6 +169,8 @@ class LeapCameraStream(BaseCameraStream):
         fps: str | None = None,
         rotate: int = 0,
         eye: str = "left",
+        correct: bool = False,
+        clahe_clip: float = 2.0,
     ) -> None:
         if eye not in ("left", "right", "both"):
             raise ValueError("eye は left/right/both のいずれかです")
@@ -177,6 +179,12 @@ class LeapCameraStream(BaseCameraStream):
         self._size = size
         self._fps = fps if fps is not None else self._MODES.get(size, "50")
         self._eye = eye
+        # 暗い赤外像の明るさ補正: CLAHE(コントラスト制限付き適応ヒストグラム平坦化)
+        self._clahe = (
+            cv2.createCLAHE(clipLimit=clahe_clip, tileGridSize=(8, 8))
+            if correct
+            else None
+        )
 
     def _resolve_index(self) -> int:
         if isinstance(self._device, int):
@@ -206,6 +214,8 @@ class LeapCameraStream(BaseCameraStream):
 
     def _emit(self, flat: np.ndarray) -> None:
         gray = np.ascontiguousarray(self._select(*self._split_eyes(flat)))
+        if self._clahe is not None:
+            gray = self._clahe.apply(gray)
         self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
 
     def _run(self) -> None:
@@ -363,13 +373,18 @@ def create_camera(
     rotate: int = 0,
     fps: int = 30,
     eye: str = "left",
+    correct: bool = False,
+    clahe_clip: float = 2.0,
 ) -> BaseCameraStream:
     """source に応じたカメラストリームを生成する。"""
     if source == "oak":
         return OakCameraStream(fps=fps, rotate=rotate)
     dev: int | str = int(device) if str(device).isdigit() else device
     if source == "leap":
-        return LeapCameraStream(device=dev, rotate=rotate, eye=eye)
+        return LeapCameraStream(
+            device=dev, rotate=rotate, eye=eye,
+            correct=correct, clahe_clip=clahe_clip,
+        )
     if source == "uvc":
         return UvcCameraStream(device=dev, fps=fps, rotate=rotate)
     raise ValueError("source は 'oak' / 'leap' / 'uvc' のいずれかです")

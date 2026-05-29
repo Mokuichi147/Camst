@@ -19,8 +19,13 @@ def create_app(
     device: int | str = "Leap Motion",
     rotate: int = 0,
     eye: str = "left",
+    correct: bool = False,
+    clahe_clip: float = 2.0,
 ) -> FastAPI:
-    camera = create_camera(source=source, device=device, rotate=rotate, eye=eye)
+    camera = create_camera(
+        source=source, device=device, rotate=rotate, eye=eye,
+        correct=correct, clahe_clip=clahe_clip,
+    )
     aspect_w, aspect_h = (9, 16) if rotate in (90, 270) else (16, 9)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     pcs: set[RTCPeerConnection] = set()
