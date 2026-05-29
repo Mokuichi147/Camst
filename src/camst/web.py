@@ -21,10 +21,11 @@ def create_app(
     eye: str = "left",
     correct: bool = False,
     clahe_clip: float = 2.0,
+    denoise: int = 1,
 ) -> FastAPI:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
-        correct=correct, clahe_clip=clahe_clip,
+        correct=correct, clahe_clip=clahe_clip, denoise=denoise,
     )
     aspect_w, aspect_h = (9, 16) if rotate in (90, 270) else (16, 9)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))

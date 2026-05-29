@@ -12,11 +12,11 @@ app = typer.Typer(add_completion=False, help="カメラ映像ビューアー (OA
 
 def _run_local(
     source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float,
+    correct: bool, clahe_clip: float, denoise: int,
 ) -> None:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
-        correct=correct, clahe_clip=clahe_clip,
+        correct=correct, clahe_clip=clahe_clip, denoise=denoise,
     )
     camera.start()
     try:
@@ -33,12 +33,12 @@ def _run_local(
 
 def _run_webui(
     host: str, port: int, source: str, device: int | str, rotate: int, eye: str,
-    correct: bool, clahe_clip: float,
+    correct: bool, clahe_clip: float, denoise: int,
 ) -> None:
     uvicorn.run(
         create_app(
             source=source, device=device, rotate=rotate, eye=eye,
-            correct=correct, clahe_clip=clahe_clip,
+            correct=correct, clahe_clip=clahe_clip, denoise=denoise,
         ),
         host=host,
         port=port,
@@ -67,6 +67,9 @@ def main(
     clahe_clip: float = typer.Option(
         2.0, "--clahe-clip", help="leap用: CLAHEのクリップ上限(大きいほど強い補正)"
     ),
+    denoise: int = typer.Option(
+        1, "--denoise", help="leap用: ノイズ低減のため直近Nフレームを移動平均(1=無効)"
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -82,11 +85,15 @@ def main(
         raise typer.BadParameter("--source は oak / leap / uvc のいずれかです")
     if rotate not in (0, 90, 180, 270):
         raise typer.BadParameter("--rotate は 0/90/180/270 のいずれかです")
+    if denoise < 1:
+        raise typer.BadParameter("--denoise は1以上です")
     if webui:
         typer.echo(f"WebUI を起動: http://{host}:{port}")
-        _run_webui(host, port, source, device, rotate, eye, correct, clahe_clip)
+        _run_webui(
+            host, port, source, device, rotate, eye, correct, clahe_clip, denoise
+        )
     else:
-        _run_local(source, device, rotate, eye, correct, clahe_clip)
+        _run_local(source, device, rotate, eye, correct, clahe_clip, denoise)
 
 
 def cli() -> None:

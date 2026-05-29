@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -171,9 +172,12 @@ class LeapCameraStream(BaseCameraStream):
         eye: str = "left",
         correct: bool = False,
         clahe_clip: float = 2.0,
+        denoise: int = 1,
     ) -> None:
         if eye not in ("left", "right", "both"):
             raise ValueError("eye は left/right/both のいずれかです")
+        if denoise < 1:
+            raise ValueError("denoise は1以上です")
         super().__init__(rotate)
         self._device = device
         self._size = size
@@ -185,6 +189,9 @@ class LeapCameraStream(BaseCameraStream):
             if correct
             else None
         )
+        # 時間方向の移動平均によるノイズ低減(直近 denoise フレーム)
+        self._denoise = denoise
+        self._buf: deque[np.ndarray] = deque(maxlen=denoise)
 
     def _resolve_index(self) -> int:
         if isinstance(self._device, int):
@@ -214,6 +221,9 @@ class LeapCameraStream(BaseCameraStream):
 
     def _emit(self, flat: np.ndarray) -> None:
         gray = np.ascontiguousarray(self._select(*self._split_eyes(flat)))
+        if self._denoise > 1:
+            self._buf.append(gray)
+            gray = np.mean(self._buf, axis=0).astype(np.uint8)
         if self._clahe is not None:
             gray = self._clahe.apply(gray)
         self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
@@ -375,6 +385,7 @@ def create_camera(
     eye: str = "left",
     correct: bool = False,
     clahe_clip: float = 2.0,
+    denoise: int = 1,
 ) -> BaseCameraStream:
     """source に応じたカメラストリームを生成する。"""
     if source == "oak":
@@ -383,7 +394,7 @@ def create_camera(
     if source == "leap":
         return LeapCameraStream(
             device=dev, rotate=rotate, eye=eye,
-            correct=correct, clahe_clip=clahe_clip,
+            correct=correct, clahe_clip=clahe_clip, denoise=denoise,
         )
     if source == "uvc":
         return UvcCameraStream(device=dev, fps=fps, rotate=rotate)
