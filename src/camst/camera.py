@@ -4,7 +4,6 @@ import threading
 import time
 
 import cv2
-import depthai as dai
 import numpy as np
 
 _ROTATE_CODE = {
@@ -14,25 +13,20 @@ _ROTATE_CODE = {
 }
 
 
-class CameraStream:
-    """OAK-D LITE のRGBフレームをバックグラウンドで取得して共有する。"""
+class BaseCameraStream:
+    """カメラフレームをバックグラウンドスレッドで取得して共有する基底クラス。"""
 
-    def __init__(
-        self,
-        size: tuple[int, int] = (1280, 720),
-        fps: int = 30,
-        rotate: int = 0,
-    ) -> None:
+    def __init__(self, rotate: int = 0) -> None:
         if rotate not in (0, 90, 180, 270):
             raise ValueError("rotate は 0/90/180/270 のいずれかです")
-        self._size = size
-        self._fps = fps
         self._rotate = rotate
         self._lock = threading.Lock()
         self._frame: np.ndarray | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._actual_fps = 0.0
+        self._fps_last = 0.0
+        self._fps_count = 0
 
     @property
     def fps(self) -> float:
@@ -53,7 +47,40 @@ class CameraStream:
         with self._lock:
             return self._frame
 
+    def _publish(self, frame: np.ndarray) -> None:
+        """取得したフレームに回転を適用して共有し、実測FPSを更新する。"""
+        if self._rotate:
+            frame = cv2.rotate(frame, _ROTATE_CODE[self._rotate])
+        with self._lock:
+            self._frame = frame
+        self._fps_count += 1
+        now = time.time()
+        if now - self._fps_last >= 1.0:
+            self._actual_fps = self._fps_count / (now - self._fps_last)
+            self._fps_count = 0
+            self._fps_last = now
+
+    def _run(self) -> None:  # pragma: no cover - サブクラスで実装
+        raise NotImplementedError
+
+
+class OakCameraStream(BaseCameraStream):
+    """OAK-D LITE のRGBフレームを depthai 経由で取得する。"""
+
+    def __init__(
+        self,
+        size: tuple[int, int] = (1280, 720),
+        fps: int = 30,
+        rotate: int = 0,
+    ) -> None:
+        super().__init__(rotate)
+        self._size = size
+        self._fps = fps
+
     def _run(self) -> None:
+        import depthai as dai
+
+        self._fps_last = time.time()
         with dai.Pipeline() as pipeline:
             cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A)
             output = cam.requestOutput(
@@ -62,18 +89,204 @@ class CameraStream:
             queue = output.createOutputQueue()
             pipeline.start()
 
-            last = time.time()
-            count = 0
             while pipeline.isRunning() and not self._stop.is_set():
                 pkt = queue.get()
-                frame = pkt.getCvFrame()
-                if self._rotate:
-                    frame = cv2.rotate(frame, _ROTATE_CODE[self._rotate])
-                with self._lock:
-                    self._frame = frame
-                count += 1
-                now = time.time()
-                if now - last >= 1.0:
-                    self._actual_fps = count / (now - last)
-                    count = 0
-                    last = now
+                self._publish(pkt.getCvFrame())
+
+
+class UvcCameraStream(BaseCameraStream):
+    """UVC（標準USBカメラ。Leap Motion 等）のフレームを OpenCV 経由で取得する。"""
+
+    def __init__(
+        self,
+        device: int | str = "Leap Motion",
+        size: tuple[int, int] | None = None,
+        fps: int = 30,
+        rotate: int = 0,
+    ) -> None:
+        super().__init__(rotate)
+        # device: 数値ならインデックス、文字列ならデバイス名の一部として検索する。
+        self._device = device
+        self._size = size
+        self._fps = fps
+
+    def _resolve_index(self) -> int:
+        if isinstance(self._device, int):
+            return self._device
+        index = find_camera_index(self._device)
+        if index is None:
+            raise RuntimeError(
+                f"名前に '{self._device}' を含むカメラが見つかりません。"
+                "接続状態を確認するか --device に番号を指定してください。"
+            )
+        return index
+
+    def _run(self) -> None:
+        index = self._resolve_index()
+        cap = cv2.VideoCapture(index)
+        if not cap.isOpened():
+            raise RuntimeError(f"カメラ(index={index})を開けませんでした")
+        if self._size is not None:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._size[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._size[1])
+        cap.set(cv2.CAP_PROP_FPS, float(self._fps))
+
+        self._fps_last = time.time()
+        try:
+            while not self._stop.is_set():
+                ok, frame = cap.read()
+                if not ok:
+                    time.sleep(0.01)
+                    continue
+                self._publish(frame)
+        finally:
+            cap.release()
+
+
+class LeapCameraStream(BaseCameraStream):
+    """Leap Motion のステレオIR映像を PyAV(avfoundation) 経由で取得する。
+
+    Leap は左右2眼のグレースケールを yuvs(YUYV422) の2バイトに交互パッキングして
+    出力する。cv2 は macOS で必ず BGR へ変換してしまい生バイトが取れないため、
+    PyAV で yuyv422 のまま受け取り、左右に分離する。
+
+    yuyv422 のフレームは (高さ, 幅, 2) で、ch 0 が片眼、ch 1 がもう片眼にあたる。
+    """
+
+    # Leap が対応する (幅, 高さ): デバイスが返す正確なネイティブfps。
+    _MODES = {
+        (640, 480): "57.500014375003595",
+        (640, 240): "115.00069000414003",
+        (752, 480): "50",
+        (752, 240): "100",
+    }
+
+    def __init__(
+        self,
+        device: int | str = "Leap Motion",
+        size: tuple[int, int] = (640, 480),
+        fps: str | None = None,
+        rotate: int = 0,
+        eye: str = "left",
+    ) -> None:
+        if eye not in ("left", "right", "both"):
+            raise ValueError("eye は left/right/both のいずれかです")
+        super().__init__(rotate)
+        self._device = device
+        self._size = size
+        self._fps = fps if fps is not None else self._MODES.get(size, "50")
+        self._eye = eye
+
+    def _resolve_index(self) -> int:
+        if isinstance(self._device, int):
+            return self._device
+        index = find_camera_index(self._device)
+        if index is None:
+            raise RuntimeError(
+                f"名前に '{self._device}' を含むカメラが見つかりません。"
+                "接続を確認するか --device に番号を指定してください。"
+            )
+        return index
+
+    def _split_eyes(self, frame) -> tuple[np.ndarray, np.ndarray]:
+        # leapuvc と同じ手順: 生バイトを (高さ, 幅*2) に並べ、左右IRが1バイトずつ
+        # 交互に並んでいるので偶数列=左眼・奇数列=右眼として分離する。
+        w, h = self._size
+        flat = np.frombuffer(bytes(frame.planes[0]), np.uint8)
+        raw = flat[: h * w * 2].reshape(h, w * 2)
+        return raw[:, 0::2], raw[:, 1::2]
+
+    def _select(self, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        if self._eye == "right":
+            return right
+        if self._eye == "both":
+            # 左右の眼を入れ替えて横並びにする（交差法での立体視向け）。
+            return np.hstack([right, left])
+        return left
+
+    def _run(self) -> None:
+        import av
+        import av.error
+
+        index = self._resolve_index()
+        w, h = self._size
+        options = {
+            "video_size": f"{w}x{h}",
+            # ネイティブ形式を指定して ffmpeg による色変換(=映像破壊)を避ける。
+            "pixel_format": "uyvy422",
+            "framerate": str(self._fps),
+        }
+        container = av.open(str(index), format="avfoundation", options=options)
+        self._fps_last = time.time()
+        try:
+            while not self._stop.is_set():
+                try:
+                    for frame in container.decode(video=0):
+                        if self._stop.is_set():
+                            break
+                        gray = np.ascontiguousarray(
+                            self._select(*self._split_eyes(frame))
+                        )
+                        self._publish(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+                except av.error.BlockingIOError:
+                    # まだフレームが届いていない。少し待って再試行する。
+                    time.sleep(0.005)
+                except av.error.EOFError:
+                    break
+        finally:
+            container.close()
+
+
+def find_camera_index(name_keyword: str) -> int | None:
+    """名前にキーワードを含む avfoundation ビデオデバイスのインデックスを返す。
+
+    libavdevice(PyAV) のデバイス一覧をそのまま解析するので、PyAV でのキャプチャ
+    時に渡すインデックスと一致する（macOS 向け）。"""
+    import re
+
+    import av
+    import av.logging
+
+    av.logging.set_level(av.logging.VERBOSE)
+    with av.logging.Capture() as logs:
+        try:
+            av.open("", format="avfoundation", options={"list_devices": "true"})
+        except Exception:
+            pass
+
+    in_video = False
+    for _level, _name, message in logs:
+        if "video devices:" in message:
+            in_video = True
+            continue
+        if "audio devices:" in message:
+            in_video = False
+            continue
+        if not in_video:
+            continue
+        m = re.match(r"\s*\[(\d+)\]\s+(.*?)\s*$", message)
+        if m and name_keyword.lower() in m.group(2).lower():
+            return int(m.group(1))
+    return None
+
+
+def create_camera(
+    source: str = "oak",
+    device: int | str = "Leap Motion",
+    rotate: int = 0,
+    fps: int = 30,
+    eye: str = "left",
+) -> BaseCameraStream:
+    """source に応じたカメラストリームを生成する。"""
+    if source == "oak":
+        return OakCameraStream(fps=fps, rotate=rotate)
+    dev: int | str = int(device) if str(device).isdigit() else device
+    if source == "leap":
+        return LeapCameraStream(device=dev, rotate=rotate, eye=eye)
+    if source == "uvc":
+        return UvcCameraStream(device=dev, fps=fps, rotate=rotate)
+    raise ValueError("source は 'oak' / 'leap' / 'uvc' のいずれかです")
+
+
+# 後方互換: 既存コードが参照する名前を維持する。
+CameraStream = OakCameraStream
