@@ -9,13 +9,18 @@ authors = [
 requires-python = ">=3.12.10"
 dependencies = [
     "aiortc>=1.14.0",
-    "av>=16.1.0",
     "fastapi>=0.136.1",
     "jinja2>=3.1.6",
     "numpy>=2.4.4",
-    "opencv-python>=4.13.0.92",
     "typer>=0.25.1",
     "uvicorn>=0.46.0",
+    # av / opencv は Raspberry Pi(armv6l) では piwheels にビルド済みwheelがある
+    # バージョンに揃える必要がある。また Pi はヘッドレス運用のため GUI依存(libGL等)が
+    # 不要な opencv-python-headless を使う。それ以外(mac等)は従来どおり最新のGUI版。
+    "av>=16.1.0; platform_machine != 'armv6l'",
+    "av>=16.0.0,<16.1; platform_machine == 'armv6l'",
+    "opencv-python>=4.13.0.92; platform_machine != 'armv6l'",
+    "opencv-python-headless>=4.12,<4.13; platform_machine == 'armv6l'",
 ]
 
 [project.optional-dependencies]
