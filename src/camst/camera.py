@@ -80,7 +80,13 @@ class OakCameraStream(BaseCameraStream):
         self._fps = fps
 
     def _run(self) -> None:
-        import depthai as dai
+        try:
+            import depthai as dai
+        except ImportError as exc:  # pragma: no cover - 環境依存
+            raise RuntimeError(
+                "OAK-D を使うには depthai が必要です。"
+                "`uv sync --extra oak`（または `pip install 'camst[oak]'`）でインストールしてください。"
+            ) from exc
 
         self._fps_last = time.time()
         with dai.Pipeline() as pipeline:
