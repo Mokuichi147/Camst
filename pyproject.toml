@@ -30,3 +30,12 @@ camst = "camst.main:cli"
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# Raspberry Pi (ARMv6/armv6l) ではPyPIにwheelが無いため、Pi向けビルド済みwheelを
+# 提供する piwheels を併用する。PyPIにwheelがある環境(mac等)ではそのままPyPIが優先される。
+index-strategy = "unsafe-best-match"
+
+[[tool.uv.index]]
+name = "piwheels"
+url = "https://www.piwheels.org/simple/"
