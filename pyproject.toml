@@ -40,6 +40,9 @@ build-backend = "uv_build"
 # Raspberry Pi (ARMv6/armv6l) ではPyPIにwheelが無いため、Pi向けビルド済みwheelを
 # 提供する piwheels を併用する。PyPIにwheelがある環境(mac等)ではそのままPyPIが優先される。
 index-strategy = "unsafe-best-match"
+# piwheelsのopencv(cp313)は numpy<2.3 を宣言するが、cp313向けnumpyは2.3以上しか
+# 存在しない。numpyはビルド時より新しいランタイムと後方互換なため、入手可能な版に上書きする。
+override-dependencies = ["numpy>=2.4.4,<2.5"]
 
 [[tool.uv.index]]
 name = "piwheels"
