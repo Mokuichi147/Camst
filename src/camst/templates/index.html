@@ -115,54 +115,99 @@
         passive: true,
       });
 
-      // --- WebRTC 接続 ---
-      const startWebRTC = async () => {
-        const pc = new RTCPeerConnection({
+      // --- WebRTC 接続(切断時は自動で再接続する) ---
+      let pc = null;
+      let reconnectTimer = null;
+
+      // 多重に走らないよう、再接続は一度に一つだけ予約する。
+      // connected に戻ったら cancelReconnect で取り消す。
+      const scheduleReconnect = (delay) => {
+        if (reconnectTimer !== null) return;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          startWebRTC();
+        }, delay);
+      };
+      const cancelReconnect = () => {
+        if (reconnectTimer !== null) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
+
+      const connect = async () => {
+        // 古い接続が残っていれば、再接続を誘発しないようハンドラを外してから閉じる。
+        const prev = pc;
+        if (prev) {
+          prev.onconnectionstatechange = null;
+          try { prev.close(); } catch {}
+        }
+
+        const conn = new RTCPeerConnection({
           iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
         });
+        pc = conn;
 
-        pc.addTransceiver("video", { direction: "recvonly" });
+        conn.addTransceiver("video", { direction: "recvonly" });
 
-        pc.ontrack = (event) => {
+        conn.ontrack = (event) => {
           if (video.srcObject !== event.streams[0]) {
             video.srcObject = event.streams[0];
           }
         };
 
-        pc.onconnectionstatechange = () => {
-          connState.textContent = "WebRTC · " + pc.connectionState;
+        conn.onconnectionstatechange = () => {
+          // すでに別の接続へ作り直していたら、古い接続のイベントは無視する。
+          if (conn !== pc) return;
+          const state = conn.connectionState;
+          connState.textContent = "WebRTC · " + state;
+          if (state === "connected") {
+            cancelReconnect();
+          } else if (state === "failed" || state === "closed") {
+            // 回復不能。すぐ作り直す。
+            scheduleReconnect(1000);
+          } else if (state === "disconnected") {
+            // 一時的な切断。少し待って回復しなければ作り直す。
+            scheduleReconnect(4000);
+          }
         };
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        const offer = await conn.createOffer();
+        await conn.setLocalDescription(offer);
 
         // ICE gathering 完了を待つ(trickle 無し)
         await new Promise((resolve) => {
-          if (pc.iceGatheringState === "complete") return resolve();
+          if (conn.iceGatheringState === "complete") return resolve();
           const check = () => {
-            if (pc.iceGatheringState === "complete") {
-              pc.removeEventListener("icegatheringstatechange", check);
+            if (conn.iceGatheringState === "complete") {
+              conn.removeEventListener("icegatheringstatechange", check);
               resolve();
             }
           };
-          pc.addEventListener("icegatheringstatechange", check);
+          conn.addEventListener("icegatheringstatechange", check);
         });
 
         const res = await fetch("/offer", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            sdp: pc.localDescription.sdp,
-            type: pc.localDescription.type,
+            sdp: conn.localDescription.sdp,
+            type: conn.localDescription.type,
           }),
         });
         const answer = await res.json();
-        await pc.setRemoteDescription(answer);
+        await conn.setRemoteDescription(answer);
       };
-      startWebRTC().catch((err) => {
-        console.error(err);
-        connState.textContent = "WebRTC · 接続失敗: " + err.message;
-      });
+
+      // シグナリング(createOffer や fetch)自体が失敗したときも再接続を予約する。
+      const startWebRTC = () => {
+        connect().catch((err) => {
+          console.error(err);
+          connState.textContent = "WebRTC · 接続失敗: " + err.message;
+          scheduleReconnect(2000);
+        });
+      };
+      startWebRTC();
 
       // --- 全画面 ---
       const hasFullscreenApi = !!(

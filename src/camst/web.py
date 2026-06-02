@@ -69,7 +69,11 @@ def create_app(
 
         @pc.on("connectionstatechange")
         async def on_state_change() -> None:
-            if pc.connectionState in {"failed", "closed", "disconnected"}:
+            # disconnected は一時的な切断で自然回復しうるため閉じない。
+            # ここで閉じると低速回線での一時的なパケットロスでも接続が永久に切れ、
+            # リロードするまで復帰しなくなる。回復不能な failed と、
+            # 明示終了の closed のときだけ破棄する。
+            if pc.connectionState in {"failed", "closed"}:
                 await pc.close()
                 pcs.discard(pc)
 
