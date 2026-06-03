@@ -5,10 +5,11 @@ from pathlib import Path
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from camst.camera import create_camera
+from camst.recorder import MotionRecorder, list_clips
 from camst.webrtc import CameraVideoTrack
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -27,6 +28,8 @@ def create_app(
     nlm_scale: float = 2.0,
     nlm_template: int = 7,
     nlm_search: int = 21,
+    record: bool = False,
+    recordings_dir: str = "recordings",
 ) -> FastAPI:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
@@ -37,13 +40,19 @@ def create_app(
     aspect_w, aspect_h = (9, 16) if rotate in (90, 270) else (16, 9)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     pcs: set[RTCPeerConnection] = set()
+    rec_dir = Path(recordings_dir)
+    recorder = MotionRecorder(camera, directory=rec_dir) if record else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         camera.start()
+        if recorder is not None:
+            recorder.start()
         try:
             yield
         finally:
+            if recorder is not None:
+                recorder.stop()
             for pc in list(pcs):
                 await pc.close()
             pcs.clear()
@@ -92,5 +101,25 @@ def create_app(
     @app.get("/status", response_class=HTMLResponse)
     async def status() -> HTMLResponse:
         return HTMLResponse(f"<span class='font-mono'>{camera.fps:5.1f} fps</span>")
+
+    @app.get("/recordings", response_class=HTMLResponse)
+    async def recordings(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "recordings.html",
+            {"clips": list_clips(rec_dir), "record": record},
+        )
+
+    @app.get("/recordings/media/{name}")
+    async def recording_media(name: str) -> FileResponse | JSONResponse:
+        # ディレクトリトラバーサル防止: 想定する命名のファイルだけを許可する。
+        path = (rec_dir / name).resolve()
+        if (
+            not name.startswith("motion_")
+            or path.parent != rec_dir.resolve()
+            or not path.is_file()
+        ):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(path)
 
     return app

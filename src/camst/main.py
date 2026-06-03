@@ -38,6 +38,7 @@ def _run_webui(
     host: str, port: int, source: str, device: int | str, rotate: int, eye: str,
     correct: bool, clahe_clip: float, denoise: int,
     nlm: bool, nlm_h: float, nlm_scale: float, nlm_template: int, nlm_search: int,
+    record: bool,
 ) -> None:
     uvicorn.run(
         create_app(
@@ -45,6 +46,7 @@ def _run_webui(
             correct=correct, clahe_clip=clahe_clip, denoise=denoise,
             nlm=nlm, nlm_h=nlm_h, nlm_scale=nlm_scale,
             nlm_template=nlm_template, nlm_search=nlm_search,
+            record=record,
         ),
         host=host,
         port=port,
@@ -91,6 +93,11 @@ def main(
     nlm_search: int = typer.Option(
         21, "--nlm-search", help="leap用: NLMeansの探索窓サイズ(奇数。小さいほど速い)"
     ),
+    record: bool = typer.Option(
+        False,
+        "--record",
+        help="動体検知でクリップを自動録画する(WebUI用。直近30件・1本最大30秒)",
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -114,6 +121,7 @@ def main(
             host, port, source, device, rotate, eye,
             correct, clahe_clip, denoise,
             nlm, nlm_h, nlm_scale, nlm_template, nlm_search,
+            record,
         )
     else:
         _run_local(
