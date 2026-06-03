@@ -49,17 +49,45 @@ def thumbnail_for_clip(path: str | Path) -> Path | None:
     except OSError:
         return None
 
-    cap = cv2.VideoCapture(str(clip))
-    try:
-        ok, frame = cap.read()
-    finally:
-        cap.release()
-    if not ok or frame is None:
+    frame = _read_thumbnail_frame(clip)
+    if frame is None:
         return None
 
     if not cv2.imwrite(str(thumb), frame, [cv2.IMWRITE_JPEG_QUALITY, 80]):
         return None
     return thumb
+
+
+def _read_thumbnail_frame(path: Path) -> np.ndarray | None:
+    frame = _read_thumbnail_frame_av(path)
+    if frame is not None:
+        return frame
+    return _read_thumbnail_frame_cv2(path)
+
+
+def _read_thumbnail_frame_cv2(path: Path) -> np.ndarray | None:
+    cap = cv2.VideoCapture(str(path))
+    try:
+        for _ in range(120):
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                return frame
+    finally:
+        cap.release()
+    return None
+
+
+def _read_thumbnail_frame_av(path: Path) -> np.ndarray | None:
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            for frame in container.decode(video=0):
+                image = frame.to_ndarray(format="rgb24")
+                return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+    return None
 
 
 class MotionRecorder:
