@@ -32,6 +32,36 @@ def list_clips(directory: str | Path) -> list[dict]:
     return clips
 
 
+def thumbnail_for_clip(path: str | Path) -> Path | None:
+    """動画の先頭フレームからサムネイルJPEGを作り、キャッシュパスを返す。"""
+    clip = Path(path)
+    try:
+        clip_stat = clip.stat()
+    except OSError:
+        return None
+
+    thumb_dir = clip.parent / ".thumbnails"
+    thumb = thumb_dir / f"{clip.stem}.jpg"
+    try:
+        if thumb.is_file() and thumb.stat().st_mtime >= clip_stat.st_mtime:
+            return thumb
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    cap = cv2.VideoCapture(str(clip))
+    try:
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    if not ok or frame is None:
+        return None
+
+    if not cv2.imwrite(str(thumb), frame, [cv2.IMWRITE_JPEG_QUALITY, 80]):
+        return None
+    return thumb
+
+
 class MotionRecorder:
     """カメラの最新フレームを監視し、動きを検知している間だけ録画する。
 

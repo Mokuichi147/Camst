@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from camst.camera import create_camera
-from camst.recorder import MotionRecorder, list_clips
+from camst.recorder import MotionRecorder, list_clips, thumbnail_for_clip
 from camst.webrtc import CameraVideoTrack
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -42,6 +42,17 @@ def create_app(
     pcs: set[RTCPeerConnection] = set()
     rec_dir = Path(recordings_dir)
     recorder = MotionRecorder(camera, directory=rec_dir) if record else None
+
+    def recording_path(name: str) -> Path | None:
+        # ディレクトリトラバーサル防止: 想定する命名のファイルだけを許可する。
+        path = (rec_dir / name).resolve()
+        if (
+            not name.startswith("motion_")
+            or path.parent != rec_dir.resolve()
+            or not path.is_file()
+        ):
+            return None
+        return path
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -120,14 +131,19 @@ def create_app(
 
     @app.get("/recordings/media/{name}", response_model=None)
     async def recording_media(name: str) -> FileResponse | JSONResponse:
-        # ディレクトリトラバーサル防止: 想定する命名のファイルだけを許可する。
-        path = (rec_dir / name).resolve()
-        if (
-            not name.startswith("motion_")
-            or path.parent != rec_dir.resolve()
-            or not path.is_file()
-        ):
+        path = recording_path(name)
+        if path is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         return FileResponse(path)
+
+    @app.get("/recordings/thumbnail/{name}", response_model=None)
+    async def recording_thumbnail(name: str) -> FileResponse | JSONResponse:
+        path = recording_path(name)
+        if path is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        thumb = thumbnail_for_clip(path)
+        if thumb is None:
+            return JSONResponse({"error": "thumbnail not available"}, status_code=404)
+        return FileResponse(thumb, media_type="image/jpeg")
 
     return app
