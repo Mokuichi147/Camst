@@ -102,7 +102,7 @@ class MotionRecorder:
         self,
         camera: BaseCameraStream,
         directory: str | Path = "recordings",
-        max_clips: int = 30,
+        max_clips: int = 100,
         max_seconds: float = 60.0,
         fps: float = 15.0,
         min_area_ratio: float = 0.005,

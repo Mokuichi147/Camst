@@ -96,7 +96,7 @@ def main(
     record: bool = typer.Option(
         False,
         "--record",
-        help="動体検知でクリップを自動録画する(WebUI用。直近30件・1本最大1分)",
+        help="動体検知でクリップを自動録画する(WebUI用。直近100件・1本最大1分)",
     ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
