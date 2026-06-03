@@ -29,6 +29,7 @@
     {% endif %}
 
     <section
+      id="recordings-list"
       hx-get="/recordings/list"
       hx-trigger="every 3s"
       hx-swap="innerHTML"
@@ -36,5 +37,26 @@
       {% include "_recordings_list.html" %}
     </section>
   </main>
+
+  <script>
+    (() => {
+      const list = document.getElementById("recordings-list");
+      const isVideoActive = () =>
+        [...list.querySelectorAll("video")].some(
+          (video) => (!video.paused && !video.ended) || video.seeking
+        );
+
+      document.body.addEventListener("htmx:beforeRequest", (event) => {
+        if (event.target === list && isVideoActive()) {
+          event.preventDefault();
+        }
+      });
+      document.body.addEventListener("htmx:beforeSwap", (event) => {
+        if (event.target === list && isVideoActive()) {
+          event.preventDefault();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
