@@ -58,10 +58,10 @@
       class="flex items-center justify-between gap-2 shrink-0 px-3 py-2 bg-slate-900"
       style="height: var(--header-h);"
     >
-      <h1 class="text-lg sm:text-xl font-semibold">Camera Stream</h1>
-      <div class="flex items-center gap-3">
+      <h1 class="min-w-0 truncate text-base sm:text-xl font-semibold">Camera Stream</h1>
+      <div class="flex shrink-0 items-center gap-1.5 sm:gap-3">
         <div
-          class="text-sm text-slate-400"
+          class="text-xs sm:text-sm text-slate-400 whitespace-nowrap"
           hx-get="/status"
           hx-trigger="load, every 1s"
           hx-swap="innerHTML"
@@ -71,16 +71,16 @@
         <span id="conn-state" class="text-xs text-slate-500 hidden sm:inline">待機中…</span>
         <a
           href="/recordings"
-          class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition"
+          class="whitespace-nowrap px-2 sm:px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs sm:text-sm font-medium transition"
         >記録</a>
         <button
           id="btn-fullscreen"
-          class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition"
+          class="whitespace-nowrap px-2 sm:px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs sm:text-sm font-medium transition"
           type="button"
         >全画面</button>
         <button
           id="btn-pip"
-          class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
+          class="whitespace-nowrap px-2 sm:px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs sm:text-sm font-medium transition disabled:opacity-40 disabled:cursor-not-allowed"
           type="button"
         >PiP</button>
       </div>
