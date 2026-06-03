@@ -11,11 +11,42 @@ import numpy as np
 from camst.camera import BaseCameraStream
 
 
+def _favorites_dir(directory: str | Path) -> Path:
+    return Path(directory) / ".favorites"
+
+
+def list_favorites(directory: str | Path) -> set[str]:
+    """お気に入り登録されたクリップ名の集合を返す。
+
+    お気に入りは .favorites ディレクトリ内の空マーカーファイルとして保持する
+    (.thumbnails と同じファイルベースの仕組みで、再起動後も残る)。
+    """
+    fav_dir = _favorites_dir(directory)
+    if not fav_dir.is_dir():
+        return set()
+    return {p.name for p in fav_dir.iterdir() if p.is_file()}
+
+
+def set_favorite(directory: str | Path, name: str, favorite: bool) -> None:
+    """クリップのお気に入り状態を設定する。name は検証済みのファイル名を渡す。"""
+    fav_dir = _favorites_dir(directory)
+    marker = fav_dir / name
+    if favorite:
+        fav_dir.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
+    else:
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+
+
 def list_clips(directory: str | Path) -> list[dict]:
     """保存済みクリップを新しい順に返す(ページ表示用)。"""
     d = Path(directory)
     if not d.is_dir():
         return []
+    favorites = list_favorites(d)
     clips: list[dict] = []
     for p in sorted(d.glob("motion_*.*"), key=lambda p: p.name, reverse=True):
         try:
@@ -27,6 +58,7 @@ def list_clips(directory: str | Path) -> list[dict]:
                 "name": p.name,
                 "size": stat.st_size,
                 "mtime": datetime.fromtimestamp(stat.st_mtime),
+                "favorite": p.name in favorites,
             }
         )
     return clips
@@ -197,12 +229,20 @@ class MotionRecorder:
         raise RuntimeError("録画用の VideoWriter を開けませんでした")
 
     def _prune(self) -> None:
+        # お気に入りは削除対象から除外し、件数上限は非お気に入りにのみ適用する。
+        favorites = list_favorites(self._dir)
         clips = sorted(
             self._dir.glob("motion_*.*"), key=lambda p: p.name, reverse=True
         )
-        for old in clips[self._max_clips :]:
+        kept = 0
+        for clip in clips:
+            if clip.name in favorites:
+                continue
+            kept += 1
+            if kept <= self._max_clips:
+                continue
             try:
-                old.unlink()
+                clip.unlink()
             except OSError:
                 pass
 

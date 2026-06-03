@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
@@ -9,7 +10,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from camst.camera import create_camera
-from camst.recorder import MotionRecorder, list_clips, thumbnail_for_clip
+from camst.recorder import (
+    MotionRecorder,
+    list_clips,
+    list_favorites,
+    set_favorite,
+    thumbnail_for_clip,
+)
 from camst.webrtc import CameraVideoTrack
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -127,6 +134,29 @@ def create_app(
             request,
             "_recordings_list.html",
             {"clips": list_clips(rec_dir)},
+        )
+
+    @app.post("/recordings/favorite/{name}", response_class=HTMLResponse)
+    async def recording_favorite(request: Request, name: str) -> HTMLResponse:
+        path = recording_path(name)
+        if path is None:
+            return HTMLResponse("not found", status_code=404)
+        # 現在の状態を反転して保存し、更新後のカードだけを返す(htmx で差し替え)。
+        favorite = name not in list_favorites(rec_dir)
+        set_favorite(rec_dir, name, favorite)
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            size = path.stat().st_size
+        except OSError:
+            return HTMLResponse("not found", status_code=404)
+        clip = {
+            "name": name,
+            "size": size,
+            "mtime": mtime,
+            "favorite": favorite,
+        }
+        return templates.TemplateResponse(
+            request, "_recording_card.html", {"clip": clip}
         )
 
     @app.get("/recordings/media/{name}", response_model=None)
