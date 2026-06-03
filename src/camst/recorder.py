@@ -103,12 +103,13 @@ class MotionRecorder:
     ) -> tuple[cv2.VideoWriter, Path, Path]:
         # ブラウザ再生を優先して avc1(H.264)→mp4v の順に試す。利用可否は実行環境の
         # OpenCV ビルド依存なので isOpened() で実際に開けたものを採用する。
-        # 録画中は隠しの .part へ書き出し、完成時に motion_* へリネームする。
+        # 録画中は隠しファイルへ書き出し、完成時に motion_* へリネームする。
+        # VideoWriter は拡張子から形式を判定するため、末尾は .mp4/.avi のままにする。
         # こうすると書き込み途中の再生できないファイルが一覧に出ない。
         name = datetime.now().strftime("motion_%Y%m%d_%H%M%S")
         for fourcc_str, ext in (("avc1", ".mp4"), ("mp4v", ".mp4"), ("MJPG", ".avi")):
             final = self._dir / f"{name}{ext}"
-            tmp = self._dir / f".{name}{ext}.part"
+            tmp = self._dir / f".{name}.part{ext}"
             writer = cv2.VideoWriter(
                 str(tmp), cv2.VideoWriter_fourcc(*fourcc_str), self._fps, size
             )
@@ -145,12 +146,13 @@ class MotionRecorder:
         self._prune()
 
     def _cleanup_partials(self) -> None:
-        # 前回クラッシュ等で残った書きかけ(.part)を起動時に掃除する。
-        for p in self._dir.glob(".motion_*.part"):
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        # 前回クラッシュ等で残った書きかけを起動時に掃除する。
+        for pattern in (".motion_*.part.*", ".motion_*.*.part"):
+            for p in self._dir.glob(pattern):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     def _run(self) -> None:
         writer: cv2.VideoWriter | None = None

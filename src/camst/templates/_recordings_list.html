@@ -1,0 +1,29 @@
+{% if clips %}
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  {% for clip in clips %}
+  <div class="rounded-xl overflow-hidden bg-slate-800/60 border border-slate-700">
+    <video
+      class="w-full aspect-video bg-black"
+      src="/recordings/media/{{ clip.name }}"
+      controls
+      preload="metadata"
+      playsinline
+      muted
+    ></video>
+    <div class="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+      <span class="font-mono text-slate-300">{{ clip.mtime.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+      <span class="text-slate-400">{{ '%.1f'|format(clip.size / 1048576) }} MB</span>
+    </div>
+    <div class="px-3 pb-3">
+      <a
+        href="/recordings/media/{{ clip.name }}"
+        download
+        class="text-xs text-sky-400 hover:text-sky-300"
+      >ダウンロード</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-slate-400">録画はまだありません。</p>
+{% endif %}
