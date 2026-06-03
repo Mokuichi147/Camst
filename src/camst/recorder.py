@@ -106,10 +106,11 @@ class MotionRecorder:
         max_clips: int = 100,
         max_seconds: float = 60.0,
         fps: float = 15.0,
-        min_area_ratio: float = 0.002,
-        diff_threshold: int = 20,
+        min_area_ratio: float = 0.003,
+        diff_threshold: int = 25,
         stop_after_idle: float = 3.0,
         min_motion_seconds: float = 1.0,
+        start_after_motion: float = 0.4,
     ) -> None:
         self._camera = camera
         self._dir = Path(directory)
@@ -122,6 +123,10 @@ class MotionRecorder:
         self._diff_threshold = diff_threshold
         self._stop_after_idle = stop_after_idle
         self._min_motion_seconds = min_motion_seconds
+        # 単発のノイズで録画を始めないよう、動きがこの秒数ぶん連続してから開始する。
+        self._start_frames = max(2, round(fps * start_after_motion))
+        # ノイズ除去(オープニング)・隙間埋め(膨張)に使う構造要素。
+        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -155,8 +160,16 @@ class MotionRecorder:
         _, thresh = cv2.threshold(
             diff, self._diff_threshold, 255, cv2.THRESH_BINARY
         )
-        ratio = cv2.countNonZero(thresh) / thresh.size
-        return ratio >= self._min_area_ratio
+        # オープニングで孤立したノイズ点を除去し、膨張で領域の隙間を埋める。
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._kernel)
+        thresh = cv2.dilate(thresh, self._kernel, iterations=1)
+        # 画面全体に散ったノイズではなく、まとまった動きだけを動体とみなす。
+        # 連結領域のうち最大の面積が一定割合を超えたときだけ「動き」と判定する。
+        contours, _ = cv2.findContours(
+            thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        largest = max((cv2.contourArea(c) for c in contours), default=0.0)
+        return largest / thresh.size >= self._min_area_ratio
 
     # --- 録画 ---
     def _open_writer(
@@ -235,6 +248,8 @@ class MotionRecorder:
         final_path: Path | None = None
         started_at = 0.0
         last_motion = 0.0
+        motion_frames = 0  # 実際に動きを検知したフレーム数(最低秒数の判定に使う)
+        pending_motion = 0  # 録画開始前に動きが連続したフレーム数
 
         try:
             while not self._stop.is_set():
@@ -247,7 +262,9 @@ class MotionRecorder:
                 moving = self._is_moving(frame)
 
                 if writer is None:
-                    if moving:
+                    # 動きが連続したときだけ録画を始める(単発ノイズを弾く)。
+                    pending_motion = pending_motion + 1 if moving else 0
+                    if pending_motion >= self._start_frames:
                         h, w = frame.shape[:2]
                         try:
                             writer, tmp_path, final_path = self._open_writer((w, h))
@@ -255,17 +272,22 @@ class MotionRecorder:
                             writer = None
                         else:
                             started_at = last_motion = tick
+                            motion_frames = pending_motion
                             writer.write(frame)
+                        pending_motion = 0
                 else:
                     writer.write(frame)
                     if moving:
                         last_motion = tick
+                        motion_frames += 1
                     over_max = tick - started_at >= self._max_seconds
                     idle = tick - last_motion >= self._stop_after_idle
                     if over_max or idle:
                         writer.release()
                         writer = None
-                        self._close(tmp_path, final_path, last_motion - started_at)
+                        self._close(
+                            tmp_path, final_path, motion_frames / self._fps
+                        )
 
                 # 処理時間を差し引いて約 fps を維持する。
                 elapsed = time.time() - tick
@@ -274,4 +296,4 @@ class MotionRecorder:
         finally:
             if writer is not None:
                 writer.release()
-                self._close(tmp_path, final_path, last_motion - started_at)
+                self._close(tmp_path, final_path, motion_frames / self._fps)
