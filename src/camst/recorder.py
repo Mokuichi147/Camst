@@ -96,6 +96,7 @@ class MotionRecorder:
     連続フレームの差分で動きを判定し、動き始めたら録画を開始する。静止が
     一定時間続くか上限時間に達したら停止してファイルを確定する。保存数は
     max_clips 件までで、超えた分は古いクリップから削除する(ストレージ節約)。
+    瞬間的なノイズ等を避けるため、動きの継続が短いクリップは保存しない。
     """
 
     def __init__(
@@ -105,9 +106,10 @@ class MotionRecorder:
         max_clips: int = 100,
         max_seconds: float = 60.0,
         fps: float = 15.0,
-        min_area_ratio: float = 0.005,
-        diff_threshold: int = 25,
+        min_area_ratio: float = 0.002,
+        diff_threshold: int = 20,
         stop_after_idle: float = 3.0,
+        min_motion_seconds: float = 1.0,
     ) -> None:
         self._camera = camera
         self._dir = Path(directory)
@@ -119,6 +121,7 @@ class MotionRecorder:
         self._min_area_ratio = min_area_ratio
         self._diff_threshold = diff_threshold
         self._stop_after_idle = stop_after_idle
+        self._min_motion_seconds = min_motion_seconds
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -203,6 +206,20 @@ class MotionRecorder:
             return
         self._prune()
 
+    def _discard(self, tmp: Path) -> None:
+        # 動きが短すぎたクリップは保存しない(瞬間的なノイズ等を弾く)。
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+    def _close(self, tmp: Path, final: Path, motion_seconds: float) -> None:
+        # 動きの継続が短ければ破棄、十分なら確定する。
+        if motion_seconds >= self._min_motion_seconds:
+            self._finalize(tmp, final)
+        else:
+            self._discard(tmp)
+
     def _cleanup_partials(self) -> None:
         # 前回クラッシュ等で残った書きかけを起動時に掃除する。
         for pattern in (".motion_*.part.*", ".motion_*.*.part"):
@@ -248,7 +265,7 @@ class MotionRecorder:
                     if over_max or idle:
                         writer.release()
                         writer = None
-                        self._finalize(tmp_path, final_path)
+                        self._close(tmp_path, final_path, last_motion - started_at)
 
                 # 処理時間を差し引いて約 fps を維持する。
                 elapsed = time.time() - tick
@@ -257,4 +274,4 @@ class MotionRecorder:
         finally:
             if writer is not None:
                 writer.release()
-                self._finalize(tmp_path, final_path)
+                self._close(tmp_path, final_path, last_motion - started_at)
