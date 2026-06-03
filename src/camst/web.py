@@ -110,7 +110,7 @@ def create_app(
             {"clips": list_clips(rec_dir), "record": record},
         )
 
-    @app.get("/recordings/media/{name}")
+    @app.get("/recordings/media/{name}", response_model=None)
     async def recording_media(name: str) -> FileResponse | JSONResponse:
         # ディレクトリトラバーサル防止: 想定する命名のファイルだけを許可する。
         path = (rec_dir / name).resolve()
