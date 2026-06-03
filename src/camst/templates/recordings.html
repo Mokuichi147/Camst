@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>録画一覧 · Camera Stream</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
   <header
@@ -28,35 +27,9 @@
     </p>
     {% endif %}
 
-    <section
-      id="recordings-list"
-      hx-get="/recordings/list"
-      hx-trigger="every 3s"
-      hx-swap="innerHTML"
-    >
+    <section id="recordings-list">
       {% include "_recordings_list.html" %}
     </section>
   </main>
-
-  <script>
-    (() => {
-      const list = document.getElementById("recordings-list");
-      const isVideoActive = () =>
-        [...list.querySelectorAll("video")].some(
-          (video) => (!video.paused && !video.ended) || video.seeking
-        );
-
-      document.body.addEventListener("htmx:beforeRequest", (event) => {
-        if (event.target === list && isVideoActive()) {
-          event.preventDefault();
-        }
-      });
-      document.body.addEventListener("htmx:beforeSwap", (event) => {
-        if (event.target === list && isVideoActive()) {
-          event.preventDefault();
-        }
-      });
-    })();
-  </script>
 </body>
 </html>
