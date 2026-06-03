@@ -70,6 +70,7 @@ class MotionRecorder:
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._cleanup_partials()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -97,18 +98,27 @@ class MotionRecorder:
         return ratio >= self._min_area_ratio
 
     # --- 録画 ---
-    def _open_writer(self, size: tuple[int, int]) -> tuple[cv2.VideoWriter, Path]:
+    def _open_writer(
+        self, size: tuple[int, int]
+    ) -> tuple[cv2.VideoWriter, Path, Path]:
         # ブラウザ再生を優先して avc1(H.264)→mp4v の順に試す。利用可否は実行環境の
         # OpenCV ビルド依存なので isOpened() で実際に開けたものを採用する。
+        # 録画中は隠しの .part へ書き出し、完成時に motion_* へリネームする。
+        # こうすると書き込み途中の再生できないファイルが一覧に出ない。
         name = datetime.now().strftime("motion_%Y%m%d_%H%M%S")
         for fourcc_str, ext in (("avc1", ".mp4"), ("mp4v", ".mp4"), ("MJPG", ".avi")):
-            path = self._dir / f"{name}{ext}"
+            final = self._dir / f"{name}{ext}"
+            tmp = self._dir / f".{name}{ext}.part"
             writer = cv2.VideoWriter(
-                str(path), cv2.VideoWriter_fourcc(*fourcc_str), self._fps, size
+                str(tmp), cv2.VideoWriter_fourcc(*fourcc_str), self._fps, size
             )
             if writer.isOpened():
-                return writer, path
+                return writer, tmp, final
             writer.release()
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         raise RuntimeError("録画用の VideoWriter を開けませんでした")
 
     def _prune(self) -> None:
@@ -121,8 +131,31 @@ class MotionRecorder:
             except OSError:
                 pass
 
+    def _finalize(self, tmp: Path, final: Path) -> None:
+        # 録画完了。最終名へリネームして初めて一覧・配信の対象にする。
+        # リネームできなければ書きかけを残さず捨てる。
+        try:
+            tmp.rename(final)
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return
+        self._prune()
+
+    def _cleanup_partials(self) -> None:
+        # 前回クラッシュ等で残った書きかけ(.part)を起動時に掃除する。
+        for p in self._dir.glob(".motion_*.part"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
     def _run(self) -> None:
         writer: cv2.VideoWriter | None = None
+        tmp_path: Path | None = None
+        final_path: Path | None = None
         started_at = 0.0
         last_motion = 0.0
 
@@ -140,7 +173,7 @@ class MotionRecorder:
                     if moving:
                         h, w = frame.shape[:2]
                         try:
-                            writer, _ = self._open_writer((w, h))
+                            writer, tmp_path, final_path = self._open_writer((w, h))
                         except RuntimeError:
                             writer = None
                         else:
@@ -155,7 +188,7 @@ class MotionRecorder:
                     if over_max or idle:
                         writer.release()
                         writer = None
-                        self._prune()
+                        self._finalize(tmp_path, final_path)
 
                 # 処理時間を差し引いて約 fps を維持する。
                 elapsed = time.time() - tick
@@ -164,4 +197,4 @@ class MotionRecorder:
         finally:
             if writer is not None:
                 writer.release()
-                self._prune()
+                self._finalize(tmp_path, final_path)
