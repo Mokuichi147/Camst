@@ -174,6 +174,12 @@ def create_app(
         thumb = thumbnail_for_clip(path)
         if thumb is None:
             return JSONResponse({"error": "thumbnail not available"}, status_code=404)
-        return FileResponse(thumb, media_type="image/jpeg")
+        # サムネイルは確定済みの録画から生成され内容が変わらないため、
+        # ブラウザに長期キャッシュさせて再読み込み時の転送を減らす。
+        return FileResponse(
+            thumb,
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     return app
