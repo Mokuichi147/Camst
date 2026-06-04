@@ -109,6 +109,40 @@ def _read_thumbnail_frame_cv2(path: Path) -> np.ndarray | None:
     return None
 
 
+def _remux_faststart(src: Path, dst: Path) -> bool:
+    """MP4 の moov アトムを先頭へ移して dst に書き出す(プログレッシブ再生用)。
+
+    OpenCV の VideoWriter は moov(再生に必要なインデックス)をファイル末尾に
+    書くため、低速回線では動画全体を取得し終わるまで再生を開始できない。
+    faststart で moov を先頭へ置くと、ブラウザは先頭から順次受信しながら
+    再生を始められる。再エンコードはせずパケットをコピーするだけなので、
+    画質の劣化や重い処理は発生しない。成功したら True を返す。
+    """
+    try:
+        import av
+
+        with av.open(str(src)) as in_container:
+            in_stream = in_container.streams.video[0]
+            with av.open(
+                str(dst), mode="w", options={"movflags": "faststart"}
+            ) as out_container:
+                out_stream = out_container.add_stream_from_template(in_stream)
+                for packet in in_container.demux(in_stream):
+                    # demux は末尾にフラッシュ用の dts=None パケットを返すので除く。
+                    if packet.dts is None:
+                        continue
+                    packet.stream = out_stream
+                    out_container.mux(packet)
+        return True
+    except Exception:
+        # 失敗時は中途半端な出力を残さない(呼び出し側がリネームへ退避する)。
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return False
+
+
 def _read_thumbnail_frame_av(path: Path) -> np.ndarray | None:
     try:
         import av
@@ -247,16 +281,25 @@ class MotionRecorder:
                 pass
 
     def _finalize(self, tmp: Path, final: Path) -> None:
-        # 録画完了。最終名へリネームして初めて一覧・配信の対象にする。
-        # リネームできなければ書きかけを残さず捨てる。
-        try:
-            tmp.rename(final)
-        except OSError:
+        # 録画完了。最終名へ確定して初めて一覧・配信の対象にする。
+        # MP4 は faststart で moov を先頭へ移して確定し、低速回線でも素早く再生
+        # 開始できるようにする。faststart に失敗した場合や MP4 以外は、書きかけを
+        # そのままリネームして確定する(再生はできるので録画を失わない)。
+        if final.suffix == ".mp4" and _remux_faststart(tmp, final):
             try:
                 tmp.unlink()
             except OSError:
                 pass
-            return
+        else:
+            try:
+                tmp.rename(final)
+            except OSError:
+                # リネームできなければ書きかけを残さず捨てる。
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                return
         self._prune()
 
     def _discard(self, tmp: Path) -> None:
