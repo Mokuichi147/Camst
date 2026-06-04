@@ -109,6 +109,43 @@ def _read_thumbnail_frame_cv2(path: Path) -> np.ndarray | None:
     return None
 
 
+def _is_faststart_mp4(path: Path) -> bool:
+    """MP4 の moov が mdat より前にある(faststart 済み)かを判定する。
+
+    トップレベルのボックスを順に読み、moov と mdat のどちらが先に現れるかで
+    判断する。判定できないときは安全側に倒して False(未変換扱い)を返す。
+    """
+    try:
+        with path.open("rb") as f:
+            while True:
+                header = f.read(8)
+                if len(header) < 8:
+                    return False
+                size = int.from_bytes(header[:4], "big")
+                box_type = header[4:8]
+                if box_type == b"moov":
+                    return True
+                if box_type == b"mdat":
+                    return False
+                if size == 1:
+                    # 64bit の largesize。実サイズはこの 8 バイトに入る。
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    size = int.from_bytes(ext, "big")
+                    skip = size - 16
+                elif size == 0:
+                    # EOF まで続く最後のボックス。moov/mdat 以外なら判定不能。
+                    return False
+                else:
+                    skip = size - 8
+                if skip < 0:
+                    return False
+                f.seek(skip, 1)
+    except OSError:
+        return False
+
+
 def _remux_faststart(src: Path, dst: Path) -> bool:
     """MP4 の moov アトムを先頭へ移して dst に書き出す(プログレッシブ再生用)。
 
@@ -203,6 +240,9 @@ class MotionRecorder:
         if self._thread is not None:
             return
         self._cleanup_partials()
+        # 既存録画の faststart 化は時間がかかりうるため、録画を妨げないよう
+        # 別スレッドで進める。
+        threading.Thread(target=self._migrate_faststart, daemon=True).start()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -317,11 +357,38 @@ class MotionRecorder:
             self._discard(tmp)
 
     def _cleanup_partials(self) -> None:
-        # 前回クラッシュ等で残った書きかけを起動時に掃除する。
-        for pattern in (".motion_*.part.*", ".motion_*.*.part"):
+        # 前回クラッシュ等で残った書きかけ・変換中ファイルを起動時に掃除する。
+        for pattern in (".motion_*.part.*", ".motion_*.*.part", ".motion_*.faststart.*"):
             for p in self._dir.glob(pattern):
                 try:
                     p.unlink()
+                except OSError:
+                    pass
+
+    def _migrate_faststart(self) -> None:
+        # 既存の MP4 で moov が末尾のものを faststart へ変換する(起動時に一度)。
+        # 変換は再エンコードを伴わないため安全だが、念のため一時ファイルへ書き出し、
+        # 成功したものだけ置き換える(失敗時は元ファイルをそのまま残す)。
+        for clip in self._dir.glob("motion_*.mp4"):
+            if self._stop.is_set():
+                return
+            try:
+                if _is_faststart_mp4(clip):
+                    continue
+            except OSError:
+                continue
+            tmp = self._dir / f".{clip.stem}.faststart.mp4"
+            if not _remux_faststart(clip, tmp):
+                continue
+            try:
+                # prune 等で元が消えていれば変換結果は捨てる(復活させない)。
+                if clip.exists():
+                    tmp.replace(clip)
+                else:
+                    tmp.unlink()
+            except OSError:
+                try:
+                    tmp.unlink()
                 except OSError:
                     pass
 
