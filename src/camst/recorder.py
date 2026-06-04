@@ -65,7 +65,7 @@ def list_clips(directory: str | Path) -> list[dict]:
 
 
 def thumbnail_for_clip(path: str | Path) -> Path | None:
-    """動画の先頭フレームからサムネイルJPEGを作り、キャッシュパスを返す。"""
+    """動画の先頭フレームからサムネイルWebPを作り、キャッシュパスを返す。"""
     clip = Path(path)
     try:
         clip_stat = clip.stat()
@@ -73,7 +73,7 @@ def thumbnail_for_clip(path: str | Path) -> Path | None:
         return None
 
     thumb_dir = clip.parent / ".thumbnails"
-    thumb = thumb_dir / f"{clip.stem}.jpg"
+    thumb = thumb_dir / f"{clip.stem}.webp"
     try:
         if thumb.is_file() and thumb.stat().st_mtime >= clip_stat.st_mtime:
             return thumb
@@ -85,7 +85,7 @@ def thumbnail_for_clip(path: str | Path) -> Path | None:
     if frame is None:
         return None
 
-    if not cv2.imwrite(str(thumb), frame, [cv2.IMWRITE_JPEG_QUALITY, 80]):
+    if not cv2.imwrite(str(thumb), frame, [cv2.IMWRITE_WEBP_QUALITY, 80]):
         return None
     return thumb
 
