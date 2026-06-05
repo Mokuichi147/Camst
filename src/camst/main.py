@@ -38,7 +38,7 @@ def _run_webui(
     host: str, port: int, source: str, device: int | str, rotate: int, eye: str,
     correct: bool, clahe_clip: float, denoise: int,
     nlm: bool, nlm_h: float, nlm_scale: float, nlm_template: int, nlm_search: int,
-    record: bool,
+    record: bool, motion_area: float, motion_threshold: int,
 ) -> None:
     uvicorn.run(
         create_app(
@@ -46,7 +46,8 @@ def _run_webui(
             correct=correct, clahe_clip=clahe_clip, denoise=denoise,
             nlm=nlm, nlm_h=nlm_h, nlm_scale=nlm_scale,
             nlm_template=nlm_template, nlm_search=nlm_search,
-            record=record,
+            record=record, motion_area=motion_area,
+            motion_threshold=motion_threshold,
         ),
         host=host,
         port=port,
@@ -98,6 +99,18 @@ def main(
         "--record",
         help="動体検知でクリップを自動録画する(WebUI用。直近100件・1本最大1分)",
     ),
+    motion_area: float = typer.Option(
+        0.0008,
+        "--motion-area",
+        help="録画用: 動きとみなす最小面積(画面に占める割合)。小さいほど"
+        "小動物など小さな動きを拾う",
+    ),
+    motion_threshold: int = typer.Option(
+        22,
+        "--motion-threshold",
+        help="録画用: 動きとみなすフレーム差分の閾値(0-255)。小さいほど"
+        "弱いコントラストの動きを拾う",
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -115,13 +128,17 @@ def main(
         raise typer.BadParameter("--rotate は 0/90/180/270 のいずれかです")
     if denoise < 1:
         raise typer.BadParameter("--denoise は1以上です")
+    if not 0.0 < motion_area <= 1.0:
+        raise typer.BadParameter("--motion-area は0より大きく1以下です")
+    if not 0 <= motion_threshold <= 255:
+        raise typer.BadParameter("--motion-threshold は0以上255以下です")
     if webui:
         typer.echo(f"WebUI を起動: http://{host}:{port}")
         _run_webui(
             host, port, source, device, rotate, eye,
             correct, clahe_clip, denoise,
             nlm, nlm_h, nlm_scale, nlm_template, nlm_search,
-            record,
+            record, motion_area, motion_threshold,
         )
     else:
         _run_local(
