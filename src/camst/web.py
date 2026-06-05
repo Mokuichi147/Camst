@@ -37,6 +37,8 @@ def create_app(
     nlm_search: int = 21,
     record: bool = False,
     recordings_dir: str = "recordings",
+    motion_area: float = 0.0008,
+    motion_threshold: int = 22,
 ) -> FastAPI:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
@@ -48,7 +50,16 @@ def create_app(
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     pcs: set[RTCPeerConnection] = set()
     rec_dir = Path(recordings_dir)
-    recorder = MotionRecorder(camera, directory=rec_dir) if record else None
+    recorder = (
+        MotionRecorder(
+            camera,
+            directory=rec_dir,
+            min_area_ratio=motion_area,
+            diff_threshold=motion_threshold,
+        )
+        if record
+        else None
+    )
 
     def recording_path(name: str) -> Path | None:
         # ディレクトリトラバーサル防止: 想定する命名のファイルだけを許可する。

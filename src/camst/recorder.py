@@ -209,8 +209,9 @@ class MotionRecorder:
         max_clips: int = 100,
         max_seconds: float = 60.0,
         fps: float = 15.0,
-        min_area_ratio: float = 0.003,
-        diff_threshold: int = 25,
+        min_area_ratio: float = 0.0008,
+        diff_threshold: int = 22,
+        blur_kernel: int = 7,
         stop_after_idle: float = 3.0,
         min_motion_seconds: float = 1.0,
         start_after_motion: float = 0.4,
@@ -224,12 +225,17 @@ class MotionRecorder:
         self._interval = 1.0 / fps
         self._min_area_ratio = min_area_ratio
         self._diff_threshold = diff_threshold
+        # 平滑化の窓は奇数でなければならない。小動物の微小な動きを残すため
+        # 既定値は控えめにしてあるが、ノイズの多い環境では大きくできる。
+        self._blur_kernel = max(1, blur_kernel | 1)
         self._stop_after_idle = stop_after_idle
         self._min_motion_seconds = min_motion_seconds
         # 単発のノイズで録画を始めないよう、動きがこの秒数ぶん連続してから開始する。
         self._start_frames = max(2, round(fps * start_after_motion))
-        # ノイズ除去(オープニング)・隙間埋め(膨張)に使う構造要素。
-        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # ノイズ除去(オープニング)用は小さめにして小動物の小さな塊を消さない。
+        # 隙間埋め(膨張)用は別に持ち、ばらけた動き領域をつなげる。
+        self._open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        self._dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -257,7 +263,11 @@ class MotionRecorder:
     # --- 動き検知 ---
     def _is_moving(self, frame: np.ndarray) -> bool:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+        # 平滑化はセンサーノイズを抑えるためだが、強すぎると小動物の弱い
+        # コントラストまで均してしまい差分が埋もれる。窓を控えめにして小さな
+        # 動きを残す(誤検知は開始前の連続フレーム判定と最低録画秒数で弾く)。
+        k = self._blur_kernel
+        gray = cv2.GaussianBlur(gray, (k, k), 0)
         prev = self._prev_gray
         self._prev_gray = gray
         if prev is None or prev.shape != gray.shape:
@@ -266,9 +276,10 @@ class MotionRecorder:
         _, thresh = cv2.threshold(
             diff, self._diff_threshold, 255, cv2.THRESH_BINARY
         )
-        # オープニングで孤立したノイズ点を除去し、膨張で領域の隙間を埋める。
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._kernel)
-        thresh = cv2.dilate(thresh, self._kernel, iterations=1)
+        # 小さなオープニングで孤立した1～2画素のノイズだけを除去し、小動物の
+        # 小さな塊は残す。膨張でばらけた動き領域の隙間を埋めてひとまとまりにする。
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._open_kernel)
+        thresh = cv2.dilate(thresh, self._dilate_kernel, iterations=1)
         # 画面全体に散ったノイズではなく、まとまった動きだけを動体とみなす。
         # 連結領域のうち最大の面積が一定割合を超えたときだけ「動き」と判定する。
         contours, _ = cv2.findContours(
