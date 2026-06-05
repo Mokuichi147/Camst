@@ -39,6 +39,7 @@ def _run_webui(
     correct: bool, clahe_clip: float, denoise: int,
     nlm: bool, nlm_h: float, nlm_scale: float, nlm_template: int, nlm_search: int,
     record: bool, motion_area: float, motion_threshold: int,
+    encode_crf: int, encode_width: int | None,
 ) -> None:
     uvicorn.run(
         create_app(
@@ -48,6 +49,7 @@ def _run_webui(
             nlm_template=nlm_template, nlm_search=nlm_search,
             record=record, motion_area=motion_area,
             motion_threshold=motion_threshold,
+            encode_crf=encode_crf, encode_width=encode_width,
         ),
         host=host,
         port=port,
@@ -111,6 +113,16 @@ def main(
         help="録画用: 動きとみなすフレーム差分の閾値(0-255)。小さいほど"
         "弱いコントラストの動きを拾う",
     ),
+    encode_crf: int = typer.Option(
+        26,
+        "--encode-crf",
+        help="録画の再エンコード品質(H.264 CRF)。大きいほど小さく低画質(目安18〜30)",
+    ),
+    encode_width: int = typer.Option(
+        0,
+        "--encode-width",
+        help="録画をこの横幅まで縮小して保存しさらに小さくする(0=縮小しない)",
+    ),
     webui: bool = typer.Option(False, "--webui", help="ブラウザでストリームを表示"),
     host: str = typer.Option("127.0.0.1", "--host", help="WebUIのバインドホスト"),
     port: int = typer.Option(8000, "--port", help="WebUIのポート"),
@@ -132,6 +144,10 @@ def main(
         raise typer.BadParameter("--motion-area は0より大きく1以下です")
     if not 0 <= motion_threshold <= 255:
         raise typer.BadParameter("--motion-threshold は0以上255以下です")
+    if not 0 <= encode_crf <= 51:
+        raise typer.BadParameter("--encode-crf は0〜51です(目安18〜30)")
+    if encode_width < 0:
+        raise typer.BadParameter("--encode-width は0以上です(0=縮小しない)")
     if webui:
         typer.echo(f"WebUI を起動: http://{host}:{port}")
         _run_webui(
@@ -139,6 +155,7 @@ def main(
             correct, clahe_clip, denoise,
             nlm, nlm_h, nlm_scale, nlm_template, nlm_search,
             record, motion_area, motion_threshold,
+            encode_crf, encode_width or None,
         )
     else:
         _run_local(
@@ -149,6 +166,56 @@ def main(
 
 def cli() -> None:
     app()
+
+
+reencode_app = typer.Typer(
+    add_completion=False,
+    help="既存の録画を H.264 へ再エンコードして縮小する(1回限りの一括変換)",
+)
+
+
+@reencode_app.command()
+def reencode(
+    recordings_dir: str = typer.Option(
+        "recordings", "--recordings-dir", help="録画の保存ディレクトリ"
+    ),
+    encode_crf: int = typer.Option(
+        26, "--encode-crf", help="再エンコード品質(H.264 CRF)。大きいほど小さく低画質"
+    ),
+    encode_width: int = typer.Option(
+        0, "--encode-width", help="この横幅まで縮小する(0=縮小しない)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="すでに H.264 のクリップも再変換する"
+    ),
+) -> None:
+    """recordings ディレクトリ内の録画をまとめて H.264 へ変換し小さくする。"""
+    from pathlib import Path
+
+    from camst.recorder import reencode_directory
+
+    if not 0 <= encode_crf <= 51:
+        raise typer.BadParameter("--encode-crf は0〜51です(目安18〜30)")
+    if encode_width < 0:
+        raise typer.BadParameter("--encode-width は0以上です(0=縮小しない)")
+    d = Path(recordings_dir)
+    if not d.is_dir():
+        raise typer.BadParameter(f"ディレクトリがありません: {recordings_dir}")
+
+    def progress(name: str, status: str, index: int, total: int) -> None:
+        mark = {"ok": "✓", "skip": "-", "failed": "✗"}.get(status, "?")
+        typer.echo(f"[{index}/{total}] {mark} {name} ({status})")
+
+    typer.echo(f"再エンコード開始: {recordings_dir} (CRF={encode_crf})")
+    done, skipped, failed = reencode_directory(
+        d, crf=encode_crf, max_width=encode_width or None, force=force,
+        on_progress=progress,
+    )
+    typer.echo(f"完了: 変換 {done} / スキップ {skipped} / 失敗 {failed}")
+
+
+def reencode_cli() -> None:
+    reencode_app()
 
 
 if __name__ == "__main__":

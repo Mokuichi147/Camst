@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
+import queue
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 
 import cv2
@@ -146,6 +150,17 @@ def _is_faststart_mp4(path: Path) -> bool:
         return False
 
 
+def _video_codec(path: Path) -> str | None:
+    """録画の映像コーデック名(例: 'h264', 'mpeg4')を返す。判定不能なら None。"""
+    try:
+        import av
+
+        with av.open(str(path)) as container:
+            return container.streams.video[0].codec_context.name
+    except Exception:
+        return None
+
+
 def _remux_faststart(src: Path, dst: Path) -> bool:
     """MP4 の moov アトムを先頭へ移して dst に書き出す(プログレッシブ再生用)。
 
@@ -178,6 +193,124 @@ def _remux_faststart(src: Path, dst: Path) -> bool:
         except OSError:
             pass
         return False
+
+
+def _transcode_h264(
+    src: Path,
+    dst: Path,
+    crf: int = 26,
+    fps: float = 15.0,
+    max_width: int | None = None,
+) -> bool:
+    """録画を H.264(libx264) で再エンコードして dst に書き出す(faststart 付き)。
+
+    OpenCV の VideoWriter はビットレート制御を持たず、mp4v では特にファイルが
+    大きくなる。libx264 を CRF で再エンコードすると、同等以上の画質のまま大幅に
+    小さくできる(かつ H.264 はブラウザのハードウェアデコードが効くため再生も軽い)。
+    max_width を指定すると、それより横が大きい映像はアスペクト比を保って縮小する。
+    成功したら True を返す。失敗時は中途半端な出力を残さない。
+    """
+    try:
+        import av
+
+        with av.open(str(src)) as in_container:
+            in_stream = in_container.streams.video[0]
+            src_w = in_stream.codec_context.width
+            src_h = in_stream.codec_context.height
+            out_w, out_h = src_w, src_h
+            if max_width and src_w > max_width:
+                out_w = max_width
+                # libx264 は偶数の幅・高さを要求するため 2 の倍数へ丸める。
+                out_h = max(2, round(src_h * max_width / src_w / 2) * 2)
+
+            with av.open(
+                str(dst), mode="w", options={"movflags": "faststart"}
+            ) as out_container:
+                # PyAV の add_stream は rate に float を受け付けない(int/Fraction)。
+                out_stream = out_container.add_stream(
+                    "libx264", rate=Fraction(fps).limit_denominator(1000)
+                )
+                out_stream.width = out_w
+                out_stream.height = out_h
+                out_stream.pix_fmt = "yuv420p"
+                out_stream.options = {"crf": str(crf), "preset": "veryfast"}
+                for frame in in_container.decode(in_stream):
+                    # 縮小と画素形式の統一を兼ねて reformat する。録画は固定 fps
+                    # なので、元の pts は捨てて出力 fps で振り直す(VFR 化を防ぐ)。
+                    out_frame = frame.reformat(
+                        width=out_w, height=out_h, format="yuv420p"
+                    )
+                    out_frame.pts = None
+                    for packet in out_stream.encode(out_frame):
+                        out_container.mux(packet)
+                for packet in out_stream.encode():
+                    out_container.mux(packet)
+        return True
+    except Exception:
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def reencode_directory(
+    directory: str | Path,
+    crf: int = 26,
+    max_width: int | None = None,
+    fps: float = 15.0,
+    force: bool = False,
+    on_progress: Callable[[str, str, int, int], None] | None = None,
+) -> tuple[int, int, int]:
+    """ディレクトリ内の録画を H.264 へ一括再エンコードして縮小する(1回限りの変換)。
+
+    既定では既に H.264 のクリップ(新規録画など)は対象外にし、mp4v などの
+    大きいクリップだけを変換する。force=True ですべて再変換する。一覧の表示
+    時刻は mtime 由来なので、置き換え後に元の mtime を復元する。
+    on_progress(name, status, index, total) で各クリップの結果を通知する。
+    status は "ok" / "skip" / "failed"。返り値は (変換, スキップ, 失敗) の本数。
+    """
+    d = Path(directory)
+    clips = sorted(d.glob("motion_*.mp4"))
+    total = len(clips)
+    done = skipped = failed = 0
+    for i, clip in enumerate(clips, start=1):
+        if not force and _video_codec(clip) == "h264":
+            skipped += 1
+            if on_progress:
+                on_progress(clip.name, "skip", i, total)
+            continue
+        try:
+            mtime = clip.stat().st_mtime
+        except OSError:
+            failed += 1
+            if on_progress:
+                on_progress(clip.name, "failed", i, total)
+            continue
+        tmp = d / f".{clip.stem}.reencode.mp4"
+        if not _transcode_h264(
+            clip, tmp, crf=crf, fps=fps, max_width=max_width
+        ):
+            failed += 1
+            if on_progress:
+                on_progress(clip.name, "failed", i, total)
+            continue
+        try:
+            tmp.replace(clip)
+            os.utime(clip, (mtime, mtime))
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            failed += 1
+            if on_progress:
+                on_progress(clip.name, "failed", i, total)
+            continue
+        done += 1
+        if on_progress:
+            on_progress(clip.name, "ok", i, total)
+    return done, skipped, failed
 
 
 def _read_thumbnail_frame_av(path: Path) -> np.ndarray | None:
@@ -215,6 +348,8 @@ class MotionRecorder:
         stop_after_idle: float = 3.0,
         min_motion_seconds: float = 1.0,
         start_after_motion: float = 0.4,
+        encode_crf: int = 26,
+        encode_width: int | None = None,
     ) -> None:
         self._camera = camera
         self._dir = Path(directory)
@@ -223,6 +358,10 @@ class MotionRecorder:
         self._max_seconds = max_seconds
         self._fps = fps
         self._interval = 1.0 / fps
+        # 確定時の再エンコード設定。CRF が大きいほど小さく(画質は下がる)、
+        # encode_width を指定するとその幅を超える映像は縮小する。
+        self._encode_crf = encode_crf
+        self._encode_width = encode_width
         self._min_area_ratio = min_area_ratio
         self._diff_threshold = diff_threshold
         # 平滑化の窓は奇数でなければならない。小動物の微小な動きを残すため
@@ -240,6 +379,10 @@ class MotionRecorder:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._prev_gray: np.ndarray | None = None
+        # 再エンコードは重いので取り込みループでは行わず、確定したクリップを
+        # キュー経由でワーカースレッドに渡して順番に処理する。
+        self._finalize_q: queue.Queue[tuple[Path, Path] | None] = queue.Queue()
+        self._finalize_thread: threading.Thread | None = None
 
     # --- ライフサイクル ---
     def start(self) -> None:
@@ -249,6 +392,11 @@ class MotionRecorder:
         # 既存録画の faststart 化は時間がかかりうるため、録画を妨げないよう
         # 別スレッドで進める。
         threading.Thread(target=self._migrate_faststart, daemon=True).start()
+        # 確定クリップの再エンコードを担うワーカーを先に立ち上げておく。
+        self._finalize_thread = threading.Thread(
+            target=self._finalize_run, daemon=True
+        )
+        self._finalize_thread.start()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -256,6 +404,12 @@ class MotionRecorder:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
+        # 取り込みスレッドの終了後にセンチネルを投入し、キューに残ったクリップを
+        # 処理し切らせてからワーカーを終える(最後のクリップを取りこぼさない)。
+        # 再エンコード1本ぶんを見込んで長めに待つ。
+        if self._finalize_thread is not None:
+            self._finalize_q.put(None)
+            self._finalize_thread.join(timeout=self._max_seconds + 30)
 
     def list_clips(self) -> list[dict]:
         return list_clips(self._dir)
@@ -333,10 +487,16 @@ class MotionRecorder:
 
     def _finalize(self, tmp: Path, final: Path) -> None:
         # 録画完了。最終名へ確定して初めて一覧・配信の対象にする。
-        # MP4 は faststart で moov を先頭へ移して確定し、低速回線でも素早く再生
-        # 開始できるようにする。faststart に失敗した場合や MP4 以外は、書きかけを
-        # そのままリネームして確定する(再生はできるので録画を失わない)。
-        if final.suffix == ".mp4" and _remux_faststart(tmp, final):
+        # MP4 は H.264(libx264) へ再エンコードしてサイズを抑えつつ確定する。
+        # 再エンコードに失敗したときは faststart コピー、それも無理なら書きかけを
+        # そのままリネームして確定する(段階的にフォールバックし録画を失わない)。
+        if final.suffix == ".mp4" and (
+            _transcode_h264(
+                tmp, final, crf=self._encode_crf,
+                fps=self._fps, max_width=self._encode_width,
+            )
+            or _remux_faststart(tmp, final)
+        ):
             try:
                 tmp.unlink()
             except OSError:
@@ -353,6 +513,20 @@ class MotionRecorder:
                 return
         self._prune()
 
+    def _finalize_run(self) -> None:
+        # 確定クリップを順番に再エンコードするワーカー。None(センチネル)を受け取る
+        # まで動き続け、それまでに投入されたクリップは FIFO で必ず処理し切る。
+        while True:
+            item = self._finalize_q.get()
+            if item is None:
+                self._finalize_q.task_done()
+                return
+            tmp, final = item
+            try:
+                self._finalize(tmp, final)
+            finally:
+                self._finalize_q.task_done()
+
     def _discard(self, tmp: Path) -> None:
         # 動きが短すぎたクリップは保存しない(瞬間的なノイズ等を弾く)。
         try:
@@ -361,15 +535,21 @@ class MotionRecorder:
             pass
 
     def _close(self, tmp: Path, final: Path, motion_seconds: float) -> None:
-        # 動きの継続が短ければ破棄、十分なら確定する。
+        # 動きの継続が短ければ破棄、十分ならワーカーへ渡して確定(再エンコード)する。
+        # 取り込みループをブロックしないよう、ここでは投入するだけにする。
         if motion_seconds >= self._min_motion_seconds:
-            self._finalize(tmp, final)
+            self._finalize_q.put((tmp, final))
         else:
             self._discard(tmp)
 
     def _cleanup_partials(self) -> None:
         # 前回クラッシュ等で残った書きかけ・変換中ファイルを起動時に掃除する。
-        for pattern in (".motion_*.part.*", ".motion_*.*.part", ".motion_*.faststart.*"):
+        for pattern in (
+            ".motion_*.part.*",
+            ".motion_*.*.part",
+            ".motion_*.faststart.*",
+            ".motion_*.reencode.*",
+        ):
             for p in self._dir.glob(pattern):
                 try:
                     p.unlink()
@@ -380,6 +560,7 @@ class MotionRecorder:
         # 既存の MP4 で moov が末尾のものを faststart へ変換する(起動時に一度)。
         # 変換は再エンコードを伴わないため安全だが、念のため一時ファイルへ書き出し、
         # 成功したものだけ置き換える(失敗時は元ファイルをそのまま残す)。
+        # 既存録画の縮小(再エンコード)は別途 camst-reencode コマンドで行う。
         for clip in self._dir.glob("motion_*.mp4"):
             if self._stop.is_set():
                 return

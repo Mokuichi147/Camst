@@ -39,6 +39,8 @@ def create_app(
     recordings_dir: str = "recordings",
     motion_area: float = 0.0008,
     motion_threshold: int = 22,
+    encode_crf: int = 26,
+    encode_width: int | None = None,
 ) -> FastAPI:
     camera = create_camera(
         source=source, device=device, rotate=rotate, eye=eye,
@@ -56,6 +58,8 @@ def create_app(
             directory=rec_dir,
             min_area_ratio=motion_area,
             diff_threshold=motion_threshold,
+            encode_crf=encode_crf,
+            encode_width=encode_width,
         )
         if record
         else None
