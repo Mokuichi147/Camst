@@ -209,42 +209,59 @@ def _transcode_h264(
     小さくできる(かつ H.264 はブラウザのハードウェアデコードが効くため再生も軽い)。
     max_width を指定すると、それより横が大きい映像はアスペクト比を保って縮小する。
     成功したら True を返す。失敗時は中途半端な出力を残さない。
+
+    デコードは PyAV ではなく OpenCV(cv2.VideoCapture)で行う。OpenCV が書いた
+    H.264 は PyAV の厳格なデコーダが弾く(avcodec_send_packet の InvalidData)
+    ことがあり、サムネイル生成が cv2 にフォールバックしているのと同じ事情による。
+    cv2 は寛容に読め、固定 fps で出力するため壊れたタイミング情報も正規化される。
     """
+    cap = cv2.VideoCapture(str(src))
+    if not cap.isOpened():
+        cap.release()
+        return False
     try:
         import av
 
-        with av.open(str(src)) as in_container:
-            in_stream = in_container.streams.video[0]
-            src_w = in_stream.codec_context.width
-            src_h = in_stream.codec_context.height
-            out_w, out_h = src_w, src_h
-            if max_width and src_w > max_width:
-                out_w = max_width
-                # libx264 は偶数の幅・高さを要求するため 2 の倍数へ丸める。
-                out_h = max(2, round(src_h * max_width / src_w / 2) * 2)
-
-            with av.open(
-                str(dst), mode="w", options={"movflags": "faststart"}
-            ) as out_container:
-                # PyAV の add_stream は rate に float を受け付けない(int/Fraction)。
-                out_stream = out_container.add_stream(
-                    "libx264", rate=Fraction(fps).limit_denominator(1000)
-                )
-                out_stream.width = out_w
-                out_stream.height = out_h
-                out_stream.pix_fmt = "yuv420p"
-                out_stream.options = {"crf": str(crf), "preset": "veryfast"}
-                for frame in in_container.decode(in_stream):
-                    # 縮小と画素形式の統一を兼ねて reformat する。録画は固定 fps
-                    # なので、元の pts は捨てて出力 fps で振り直す(VFR 化を防ぐ)。
-                    out_frame = frame.reformat(
-                        width=out_w, height=out_h, format="yuv420p"
+        out_stream = None
+        out_w = out_h = 0
+        with av.open(
+            str(dst), mode="w", options={"movflags": "faststart"}
+        ) as out_container:
+            wrote = 0
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                if out_stream is None:
+                    h, w = frame.shape[:2]
+                    out_w, out_h = w, h
+                    if max_width and w > max_width:
+                        out_w = max_width
+                        out_h = round(h * max_width / w)
+                    # libx264 は偶数の幅・高さを要求するため 2 の倍数へ丸める。
+                    out_w = max(2, out_w - out_w % 2)
+                    out_h = max(2, out_h - out_h % 2)
+                    # PyAV の add_stream は rate に float を受け付けない(int/Fraction)。
+                    out_stream = out_container.add_stream(
+                        "libx264", rate=Fraction(fps).limit_denominator(1000)
                     )
-                    out_frame.pts = None
-                    for packet in out_stream.encode(out_frame):
-                        out_container.mux(packet)
-                for packet in out_stream.encode():
+                    out_stream.width = out_w
+                    out_stream.height = out_h
+                    out_stream.pix_fmt = "yuv420p"
+                    out_stream.options = {"crf": str(crf), "preset": "veryfast"}
+                # 色変換(BGR→yuv420p)と縮小をまとめて行う。録画は固定 fps なので
+                # 元のタイミングは捨て、出力 fps で振り直す(VFR 化を防ぐ)。
+                out_frame = av.VideoFrame.from_ndarray(
+                    frame, format="bgr24"
+                ).reformat(width=out_w, height=out_h, format="yuv420p")
+                out_frame.pts = None
+                for packet in out_stream.encode(out_frame):
                     out_container.mux(packet)
+                wrote += 1
+            if out_stream is None or wrote == 0:
+                raise RuntimeError("デコードできるフレームがありません")
+            for packet in out_stream.encode():
+                out_container.mux(packet)
         return True
     except Exception:
         try:
@@ -252,6 +269,8 @@ def _transcode_h264(
         except OSError:
             pass
         return False
+    finally:
+        cap.release()
 
 
 def reencode_directory(
