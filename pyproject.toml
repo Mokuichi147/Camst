@@ -26,6 +26,7 @@ oak = [
 
 [project.scripts]
 camst = "camst.main:cli"
+camst-reencode = "camst.main:reencode_cli"
 
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
