@@ -59,13 +59,13 @@ def _run_webui(
 @app.command()
 def main(
     source: str = typer.Option(
-        "oak",
+        "uvc",
         "--source",
         help="カメラの種類 (oak | leap | uvc)",
         case_sensitive=False,
     ),
     device: str = typer.Option(
-        "Leap Motion",
+        "0",
         "--device",
         help="leap/uvc用のデバイス指定。番号 (例: 1) かデバイス名の一部 (例: Leap)",
     ),
