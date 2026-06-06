@@ -9,13 +9,18 @@ authors = [
 requires-python = ">=3.12.10"
 dependencies = [
     "aiortc>=1.14.0",
-    "av>=16.1.0",
     "fastapi>=0.136.1",
     "jinja2>=3.1.6",
     "numpy>=2.4.4",
-    "opencv-python>=4.13.0.92",
     "typer>=0.25.1",
     "uvicorn>=0.46.0",
+    # av / opencv は Raspberry Pi(armv6l) では piwheels にビルド済みwheelがある
+    # バージョンに揃える必要がある。また Pi はヘッドレス運用のため GUI依存(libGL等)が
+    # 不要な opencv-python-headless を使う。それ以外(mac等)は従来どおり最新のGUI版。
+    "av>=16.1.0; platform_machine != 'armv6l'",
+    "av>=16.0.0,<16.1; platform_machine == 'armv6l'",
+    "opencv-python>=4.13.0.92; platform_machine != 'armv6l'",
+    "opencv-python-headless>=4.12,<4.13; platform_machine == 'armv6l'",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +36,15 @@ camst-reencode = "camst.main:reencode_cli"
 [build-system]
 requires = ["uv_build>=0.9.17,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# Raspberry Pi (ARMv6/armv6l) ではPyPIにwheelが無いため、Pi向けビルド済みwheelを
+# 提供する piwheels を併用する。PyPIにwheelがある環境(mac等)ではそのままPyPIが優先される。
+index-strategy = "unsafe-best-match"
+# piwheelsのopencv(cp313)は numpy<2.3 を宣言するが、cp313向けnumpyは2.3以上しか
+# 存在しない。numpyはビルド時より新しいランタイムと後方互換なため、入手可能な版に上書きする。
+override-dependencies = ["numpy>=2.4.4,<2.5"]
+
+[[tool.uv.index]]
+name = "piwheels"
+url = "https://www.piwheels.org/simple/"
